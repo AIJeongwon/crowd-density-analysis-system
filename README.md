@@ -8,7 +8,7 @@ CDAS(Crowd Density Analysis System)는 열화상 카메라와 LiDAR 센서를 �
 
 이 프로젝트는 센서 노드, 데이터 수집 서버, 혼잡도 분석 로직, 웹 대시보드를 하나의 흐름으로 연결하는 엔드투엔드 시스템을 지향합니다.
 
-초기에는 실제 센서 연동 전 가상 센서 클라이언트를 통해 데이터 수집과 시각화 흐름을 먼저 검증하고, 이후 라즈베리파이 기반 센서 모듈과 AI 추론 로직을 단계적으로 통합합니다.
+초기에는 실제 센서 연동 전 가상 센서 클라이언트를 통해 데이터 수집 흐름을 먼저 검증하고, 이후 라즈베리파이 기반 센서 모듈과 AI 추론 로직을 단계적으로 통합합니다.
 
 ## 목표
 
@@ -22,22 +22,20 @@ CDAS(Crowd Density Analysis System)는 열화상 카메라와 LiDAR 센서를 �
 ## 시스템 구조
 
 ```txt
-열화상 카메라 / LiDAR
-        |
-        v
-라즈베리파이 센서 노드
-        |
-        v
-데이터 수집 API
-        |
-        v
-백엔드 서버 + 데이터베이스
-        |
-        v
-웹 대시보드
+열화상 센서 노드
+  -> 데이터 수집 API
+  -> 백엔드 서버
+  -> 웹 대시보드
+
+LiDAR 센서 노드
+  -> 데이터 수집 API
+  -> 백엔드 서버
+  -> 웹 대시보드
 ```
 
 ## 주요 기능
+
+현재 구현된 기능과 앞으로 구현할 기능을 함께 정리합니다.
 
 - 라즈베리파이 센서 노드 기반 데이터 수집
 - 초기 백엔드 및 프론트엔드 개발을 위한 가상 센서 클라이언트
@@ -52,10 +50,10 @@ CDAS(Crowd Density Analysis System)는 열화상 카메라와 LiDAR 센서를 �
 | --- | --- |
 | 하드웨어 | Raspberry Pi, Thermal Camera, LiDAR |
 | 센서 클라이언트 | Python |
-| 백엔드 | FastAPI 또는 Spring Boot |
+| 백엔드 | Python 표준 라이브러리, FastAPI 또는 Spring Boot 검토 |
 | AI / 데이터 | Python, OpenCV, NumPy, PyTorch |
 | 프론트엔드 | React, TypeScript |
-| 데이터베이스 | PostgreSQL |
+| 데이터 저장 | 메모리 저장소, SQLite 또는 PostgreSQL |
 | 인프라 | Docker, AWS |
 | 문서화 | Markdown, Swagger/OpenAPI |
 
@@ -81,10 +79,33 @@ CDAS(Crowd Density Analysis System)는 열화상 카메라와 LiDAR 센서를 �
 
 Docker 기반 실행 환경과 AWS 배포 환경을 구성하고, API 명세와 트러블슈팅 과정을 문서화합니다.
 
+## 로컬 실행
+
+현재 초기 프로토타입은 Python 표준 라이브러리만 사용합니다.
+
+```bash
+python -m backend.app.server --host 127.0.0.1 --port 8000
+```
+
+다른 터미널에서 가상 센서 클라이언트를 실행합니다.
+
+```bash
+python sensor-client/mock_sensor_client.py --sensor-type both --cycles 10
+```
+
+혼잡도 상태는 다음 API로 확인할 수 있습니다.
+
+```txt
+GET http://127.0.0.1:8000/api/locations/moran-market-gate-1/status
+```
+
 ## 문서화 계획
 
-프로젝트가 진행되면서 다음 문서를 순차적으로 정리할 예정입니다.
+프로젝트가 진행되면서 다음 문서를 순차적으로 정리합니다.
 
+- `docs/data-contract.md`: 센서 데이터 요청 형식과 초기 혼잡도 계산 방식
+- `docs/development.md`: 커밋, 브랜치, 테스트, 코드 스타일 기준
+- `docs/improvements.md`: 향후 개선 항목
 - `docs/architecture.md`: 전체 시스템 구조와 데이터 흐름
 - `docs/hardware.md`: 센서 구성, 라즈베리파이 설정, 설치 기록
 - `docs/api.md`: 데이터 수집 및 조회 API 명세
