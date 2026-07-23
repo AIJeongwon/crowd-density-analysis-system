@@ -15,6 +15,9 @@ CENTIKELVIN_OFFSET = 27315.0
 DEVICE_PATH_PATTERN = re.compile(r"^/dev/[A-Za-z0-9_./-]+$")
 FORMAT_PATTERN = re.compile(r"^\s*\[\d+\]:\s+'([^']+)'")
 SIZE_PATTERN = re.compile(r"Size:\s+Discrete\s+(\d+)x(\d+)")
+MINIMUM_AUTO_DISPLAY_SPAN = 4.0
+TEMPORAL_FILTER_ALPHA = 0.35
+MOTION_THRESHOLD_CELSIUS = 1.0
 
 
 @dataclass(frozen=True)
@@ -116,6 +119,11 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["inferno", "turbo", "jet", "hot"],
         default="inferno",
     )
+    parser.add_argument(
+        "--display-mode",
+        choices=["smooth", "raw"],
+        default="smooth",
+    )
     parser.add_argument("--min-temp", type=float)
     parser.add_argument("--max-temp", type=float)
     parser.add_argument(
@@ -196,6 +204,59 @@ def calculate_statistics(
         minimum_point=(int(minimum_x), int(minimum_y)),
         maximum_point=(int(maximum_x), int(maximum_y)),
     )
+
+
+def expand_temperature_range(
+    minimum: float,
+    maximum: float,
+    minimum_span: float,
+) -> tuple[float, float]:
+    if minimum_span <= 0:
+        raise ValueError("최소 표시 온도 폭은 0보다 커야 합니다.")
+    if maximum <= minimum:
+        raise ValueError("최대 표시 온도는 최소 표시 온도보다 커야 합니다.")
+    if maximum - minimum >= minimum_span:
+        return float(minimum), float(maximum)
+
+    center = (minimum + maximum) / 2.0
+    half_span = minimum_span / 2.0
+    return center - half_span, center + half_span
+
+
+def filter_display_temperature(
+    current_frame: Any,
+    previous_frame: Any | None,
+    alpha: float,
+    motion_threshold: float,
+    np: Any,
+) -> Any:
+    if not 0.0 < alpha <= 1.0:
+        raise ValueError("시간 필터 계수는 0보다 크고 1 이하여야 합니다.")
+    if motion_threshold <= 0:
+        raise ValueError("움직임 판단 온도 차이는 0보다 커야 합니다.")
+    if previous_frame is None or previous_frame.shape != current_frame.shape:
+        return current_frame.astype(np.float32, copy=True)
+
+    difference = current_frame - previous_frame
+    blended = previous_frame + difference * alpha
+    return np.where(
+        np.abs(difference) >= motion_threshold,
+        current_frame,
+        blended,
+    ).astype(np.float32)
+
+
+def is_window_visible(cv2: Any, window_name: str) -> bool:
+    try:
+        return (
+            cv2.getWindowProperty(
+                window_name,
+                cv2.WND_PROP_VISIBLE,
+            )
+            >= 1
+        )
+    except cv2.error:
+        return False
 
 
 class ThermalCapture:
@@ -324,6 +385,7 @@ class ThermalViewer:
         fixed_range: tuple[float, float] | None,
         rotate: int,
         output_dir: Path,
+        display_mode: str,
         cv2: Any,
         np: Any,
     ) -> None:
@@ -333,6 +395,7 @@ class ThermalViewer:
         self.fixed_range = fixed_range
         self.rotate = rotate
         self.output_dir = output_dir
+        self.display_mode = display_mode
         self.cv2 = cv2
         self.np = np
         self.selected_point: tuple[int, int] | None = None
@@ -341,6 +404,8 @@ class ThermalViewer:
         self.image_height = 0
         self.last_timestamp = time.monotonic()
         self.fps = 0.0
+        self.filtered_display_frame: Any | None = None
+        self.previous_display_range: tuple[float, float] | None = None
 
     def run(self) -> None:
         self.capture.open()
@@ -371,6 +436,8 @@ class ThermalViewer:
                 self.cv2.imshow(self.window_name, display)
 
                 key = self.cv2.waitKey(1) & 0xFF
+                if not is_window_visible(self.cv2, self.window_name):
+                    break
                 if key in (27, ord("q")):
                     break
                 if key == ord("s"):
@@ -383,8 +450,11 @@ class ThermalViewer:
                     self.selected_point = None
                 elif key == ord("p"):
                     self._cycle_palette()
+                elif key == ord("d"):
+                    self._toggle_display_mode()
                 elif key == ord("a"):
                     self.fixed_range = None
+                    self.previous_display_range = None
 
                 self._update_fps()
                 self._warn_if_tlinear_is_suspicious(statistics, display_range)
@@ -397,13 +467,24 @@ class ThermalViewer:
         temperature_frame: Any,
         statistics: TemperatureStatistics,
     ) -> tuple[Any, Any, tuple[float, float]]:
-        display_range = self._resolve_display_range(temperature_frame)
+        display_temperature_frame = self._prepare_display_frame(
+            temperature_frame
+        )
+        display_range = self._resolve_display_range(display_temperature_frame)
         minimum, maximum = display_range
         normalized = self.np.clip(
-            (temperature_frame - minimum) * 255.0 / (maximum - minimum),
+            (display_temperature_frame - minimum) * 255.0
+            / (maximum - minimum),
             0,
             255,
         ).astype(self.np.uint8)
+        if self.display_mode == "smooth":
+            normalized = self.cv2.bilateralFilter(
+                normalized,
+                d=5,
+                sigmaColor=18,
+                sigmaSpace=2,
+            )
         color_frame = self.cv2.applyColorMap(
             normalized,
             self._palette_code(),
@@ -415,7 +496,11 @@ class ThermalViewer:
         enlarged = self.cv2.resize(
             color_frame,
             (self.image_width, self.image_height),
-            interpolation=self.cv2.INTER_NEAREST,
+            interpolation=(
+                self.cv2.INTER_CUBIC
+                if self.display_mode == "smooth"
+                else self.cv2.INTER_NEAREST
+            ),
         )
 
         selected = self.selected_point or (width // 2, height // 2)
@@ -450,13 +535,58 @@ class ThermalViewer:
         )
         return canvas, color_frame, display_range
 
+    def _prepare_display_frame(self, temperature_frame: Any) -> Any:
+        if self.display_mode == "raw":
+            return temperature_frame
+
+        filtered = filter_display_temperature(
+            current_frame=temperature_frame,
+            previous_frame=self.filtered_display_frame,
+            alpha=TEMPORAL_FILTER_ALPHA,
+            motion_threshold=MOTION_THRESHOLD_CELSIUS,
+            np=self.np,
+        )
+        self.filtered_display_frame = filtered
+        return filtered
+
     def _resolve_display_range(self, temperature_frame: Any) -> tuple[float, float]:
         if self.fixed_range is not None:
             return self.fixed_range
         minimum, maximum = self.np.percentile(temperature_frame, [2.0, 98.0])
         if maximum - minimum < 0.1:
             maximum = minimum + 0.1
-        return float(minimum), float(maximum)
+        current_range = (float(minimum), float(maximum))
+        if self.display_mode == "raw":
+            return current_range
+
+        current_range = expand_temperature_range(
+            *current_range,
+            minimum_span=MINIMUM_AUTO_DISPLAY_SPAN,
+        )
+        if self.previous_display_range is None:
+            self.previous_display_range = current_range
+            return current_range
+
+        previous_minimum, previous_maximum = self.previous_display_range
+        current_minimum, current_maximum = current_range
+        range_alpha = 0.2
+        smoothed_minimum = (
+            current_minimum
+            if current_minimum < previous_minimum
+            else previous_minimum
+            + (current_minimum - previous_minimum) * range_alpha
+        )
+        smoothed_maximum = (
+            current_maximum
+            if current_maximum > previous_maximum
+            else previous_maximum
+            + (current_maximum - previous_maximum) * range_alpha
+        )
+        self.previous_display_range = (
+            smoothed_minimum,
+            smoothed_maximum,
+        )
+        return self.previous_display_range
 
     def _draw_marker(
         self,
@@ -532,6 +662,16 @@ class ThermalViewer:
             )
             y += 65
 
+        self.cv2.putText(
+            canvas,
+            f"VIEW   {self.display_mode.upper()}",
+            (x, panel_height - 80),
+            self.cv2.FONT_HERSHEY_SIMPLEX,
+            0.42,
+            (170, 170, 170),
+            1,
+            self.cv2.LINE_AA,
+        )
         range_text = f"{display_range[0]:.1f} .. {display_range[1]:.1f} C"
         self.cv2.putText(
             canvas,
@@ -573,6 +713,14 @@ class ThermalViewer:
         index = self.PALETTES.index(self.palette)
         self.palette = self.PALETTES[(index + 1) % len(self.PALETTES)]
         print(f"팔레트 변경: {self.palette}")
+
+    def _toggle_display_mode(self) -> None:
+        self.display_mode = (
+            "raw" if self.display_mode == "smooth" else "smooth"
+        )
+        self.filtered_display_frame = None
+        self.previous_display_range = None
+        print(f"화면 표시 방식 변경: {self.display_mode}")
 
     def _save_snapshot(
         self,
@@ -662,6 +810,7 @@ def main() -> int:
             fixed_range=fixed_range,
             rotate=args.rotate,
             output_dir=args.output_dir,
+            display_mode=args.display_mode,
             cv2=cv2,
             np=np,
         )

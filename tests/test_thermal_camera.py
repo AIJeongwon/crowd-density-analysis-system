@@ -51,6 +51,16 @@ class ThermalCameraTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.camera.validate_device_path("/dev/video0 ! fakesink")
 
+    def test_expands_narrow_temperature_range_around_center(self) -> None:
+        self.assertEqual(
+            self.camera.expand_temperature_range(24.0, 25.0, 4.0),
+            (22.5, 26.5),
+        )
+        self.assertEqual(
+            self.camera.expand_temperature_range(20.0, 30.0, 4.0),
+            (20.0, 30.0),
+        )
+
     def test_selects_y16_image_resolution_without_telemetry_rows(self) -> None:
         output = """
         [0]: 'UYVY' (UYVY 4:2:2)
@@ -94,6 +104,49 @@ class ThermalCameraTest(unittest.TestCase):
         self.assertEqual(statistics.minimum, 20.0)
         self.assertEqual(statistics.maximum, 30.0)
         self.assertEqual(statistics.average, 25.0)
+
+    @unittest.skipIf(np is None, "NumPy가 설치되지 않았습니다.")
+    def test_temporal_filter_reduces_noise_without_delaying_motion(self) -> None:
+        previous = np.full((3, 3), 20.0, dtype=np.float32)
+        current = np.full((3, 3), 20.4, dtype=np.float32)
+        current[1, 1] = 25.0
+
+        filtered = self.camera.filter_display_temperature(
+            current,
+            previous,
+            alpha=0.25,
+            motion_threshold=1.0,
+            np=np,
+        )
+
+        self.assertAlmostEqual(float(filtered[0, 0]), 20.1, places=4)
+        self.assertAlmostEqual(float(filtered[1, 1]), 25.0, places=4)
+
+    def test_detects_closed_window(self) -> None:
+        class FakeCv2:
+            WND_PROP_VISIBLE = 1
+            error = RuntimeError
+
+            @staticmethod
+            def getWindowProperty(_window_name: str, _property: int) -> float:
+                return 0.0
+
+        self.assertFalse(
+            self.camera.is_window_visible(FakeCv2, "CDAS Thermal Camera")
+        )
+
+    def test_treats_destroyed_window_as_closed(self) -> None:
+        class FakeCv2:
+            WND_PROP_VISIBLE = 1
+            error = RuntimeError
+
+            @staticmethod
+            def getWindowProperty(_window_name: str, _property: int) -> float:
+                raise RuntimeError("창이 이미 제거됨")
+
+        self.assertFalse(
+            self.camera.is_window_visible(FakeCv2, "CDAS Thermal Camera")
+        )
 
 
 if __name__ == "__main__":
