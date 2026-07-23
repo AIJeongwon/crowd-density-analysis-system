@@ -51,6 +51,33 @@ class ThermalCameraTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.camera.validate_device_path("/dev/video0 ! fakesink")
 
+    def test_selects_y16_image_resolution_without_telemetry_rows(self) -> None:
+        output = """
+        [0]: 'UYVY' (UYVY 4:2:2)
+            Size: Discrete 80x60
+        [1]: 'Y16 ' (16-bit Greyscale)
+            Size: Discrete 80x60
+            Size: Discrete 80x63
+        [2]: 'GREY' (8-bit Greyscale)
+            Size: Discrete 80x60
+        """
+
+        resolutions = self.camera.parse_y16_resolutions(output)
+
+        self.assertEqual(resolutions, [(80, 60), (80, 63)])
+        self.assertEqual(
+            self.camera.select_y16_resolution(resolutions),
+            (80, 60),
+        )
+
+    def test_prefers_largest_native_y16_resolution(self) -> None:
+        self.assertEqual(
+            self.camera.select_y16_resolution(
+                [(80, 60), (160, 120), (160, 123)]
+            ),
+            (160, 120),
+        )
+
     @unittest.skipIf(np is None, "NumPy가 설치되지 않았습니다.")
     def test_decodes_y16_byte_frame_and_calculates_statistics(self) -> None:
         raw = np.full((120, 160), 29815, dtype=np.uint16)

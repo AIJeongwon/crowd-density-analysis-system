@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -11,9 +12,9 @@ from typing import Any
 
 
 CENTIKELVIN_OFFSET = 27315.0
-DEFAULT_WIDTH = 160
-DEFAULT_HEIGHT = 120
 DEVICE_PATH_PATTERN = re.compile(r"^/dev/[A-Za-z0-9_./-]+$")
+FORMAT_PATTERN = re.compile(r"^\s*\[\d+\]:\s+'([^']+)'")
+SIZE_PATTERN = re.compile(r"Size:\s+Discrete\s+(\d+)x(\d+)")
 
 
 @dataclass(frozen=True)
@@ -50,13 +51,60 @@ def validate_device_path(device: str) -> str:
     return device
 
 
+def parse_y16_resolutions(output: str) -> list[tuple[int, int]]:
+    current_format = ""
+    resolutions: list[tuple[int, int]] = []
+
+    for line in output.splitlines():
+        format_match = FORMAT_PATTERN.search(line)
+        if format_match:
+            current_format = format_match.group(1).strip()
+            continue
+
+        size_match = SIZE_PATTERN.search(line)
+        if current_format == "Y16" and size_match:
+            resolution = (int(size_match.group(1)), int(size_match.group(2)))
+            if resolution not in resolutions:
+                resolutions.append(resolution)
+
+    return resolutions
+
+
+def select_y16_resolution(
+    resolutions: list[tuple[int, int]],
+) -> tuple[int, int]:
+    if not resolutions:
+        raise RuntimeError("장치에서 Y16 해상도를 찾지 못했습니다.")
+
+    image_resolutions = [
+        resolution
+        for resolution in resolutions
+        if resolution[0] * 3 == resolution[1] * 4
+    ]
+    candidates = image_resolutions or resolutions
+    return max(candidates, key=lambda resolution: resolution[0] * resolution[1])
+
+
+def detect_y16_resolution(device: str) -> tuple[int, int]:
+    result = subprocess.run(
+        ["v4l2-ctl", "-d", device, "--list-formats-ext"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        message = result.stderr.strip() or "v4l2-ctl 실행 실패"
+        raise RuntimeError(f"카메라 형식을 확인하지 못했습니다: {message}")
+    return select_y16_resolution(parse_y16_resolutions(result.stdout))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="PureThermal 3의 Y16 영상을 온도와 함께 실시간으로 표시합니다."
     )
     parser.add_argument("--device", default="/dev/video0")
-    parser.add_argument("--width", type=int, default=DEFAULT_WIDTH)
-    parser.add_argument("--height", type=int, default=DEFAULT_HEIGHT)
+    parser.add_argument("--width", type=int)
+    parser.add_argument("--height", type=int)
     parser.add_argument("--scale", type=int, default=4)
     parser.add_argument(
         "--backend",
@@ -584,7 +632,15 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        if args.width <= 0 or args.height <= 0:
+        device = validate_device_path(args.device)
+        if (args.width is None) != (args.height is None):
+            raise ValueError("--width와 --height는 함께 지정해야 합니다.")
+        if args.width is None:
+            width, height = detect_y16_resolution(device)
+            print(f"Y16 해상도 감지: {width}x{height}")
+        else:
+            width, height = args.width, args.height
+        if width <= 0 or height <= 0:
             raise ValueError("영상 크기는 1 이상이어야 합니다.")
         if not 1 <= args.scale <= 10:
             raise ValueError("--scale은 1에서 10 사이여야 합니다.")
@@ -592,9 +648,9 @@ def main() -> int:
         fixed_range = validate_temperature_range(args.min_temp, args.max_temp)
         cv2, np = _load_runtime_dependencies()
         capture = ThermalCapture(
-            device=args.device,
-            width=args.width,
-            height=args.height,
+            device=device,
+            width=width,
+            height=height,
             backend=args.backend,
             cv2=cv2,
             np=np,

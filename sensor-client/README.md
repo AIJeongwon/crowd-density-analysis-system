@@ -32,7 +32,7 @@ v4l2-ctl --list-devices
 v4l2-ctl -d /dev/video0 --list-formats-ext
 ```
 
-목록에 `Y16` 또는 `16-bit Greyscale` 형식이 있어야 온도를 계산할 수 있습니다. 실제 장치 번호가 `/dev/video1`이라면 아래 실행 명령의 경로도 바꿉니다.
+목록에 `Y16` 또는 `16-bit Greyscale` 형식이 있어야 온도를 계산할 수 있습니다. 프로그램은 목록에서 텔레메트리 행이 없는 Y16 해상도를 자동으로 선택합니다. 실제 장치 번호가 `/dev/video1`이라면 아래 실행 명령의 경로도 바꿉니다.
 
 ### 실행
 
@@ -40,6 +40,15 @@ v4l2-ctl -d /dev/video0 --list-formats-ext
 
 ```bash
 python3 sensor-client/thermal_camera.py --device /dev/video0
+```
+
+해상도 자동 감지가 되지 않을 때만 장치가 지원하는 크기를 직접 지정합니다.
+
+```bash
+python3 sensor-client/thermal_camera.py \
+  --device /dev/video0 \
+  --width 80 \
+  --height 60
 ```
 
 V4L2 직접 연결이 되지 않을 경우 GStreamer 백엔드를 명시할 수 있습니다.
