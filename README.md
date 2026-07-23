@@ -93,6 +93,12 @@ python -m backend.app.server --host 127.0.0.1 --port 8000
 python sensor-client/mock_sensor_client.py --sensor-type both --cycles 10
 ```
 
+PureThermal 3와 Lepton 3.5를 연결한 라즈베리파이에서는 실시간 열화상 프로그램을 실행할 수 있습니다. 설치와 장치 설정은 `sensor-client/README.md`를 참고합니다.
+
+```bash
+python3 sensor-client/thermal_camera.py --device /dev/video0
+```
+
 혼잡도 상태는 다음 API로 확인할 수 있습니다.
 
 ```txt
