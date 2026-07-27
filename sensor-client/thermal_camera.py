@@ -15,7 +15,7 @@ CENTIKELVIN_OFFSET = 27315.0
 DEVICE_PATH_PATTERN = re.compile(r"^/dev/[A-Za-z0-9_./-]+$")
 FORMAT_PATTERN = re.compile(r"^\s*\[\d+\]:\s+'([^']+)'")
 SIZE_PATTERN = re.compile(r"Size:\s+Discrete\s+(\d+)x(\d+)")
-MINIMUM_AUTO_DISPLAY_SPAN = 4.0
+MINIMUM_AUTO_DISPLAY_SPAN = 2.0
 TEMPORAL_FILTER_ALPHA = 0.35
 MOTION_THRESHOLD_CELSIUS = 1.0
 

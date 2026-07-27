@@ -59,11 +59,11 @@ class ThermalCameraTest(unittest.TestCase):
 
     def test_expands_narrow_temperature_range_around_center(self) -> None:
         self.assertEqual(
-            self.camera.expand_temperature_range(24.0, 25.0, 4.0),
-            (22.5, 26.5),
+            self.camera.expand_temperature_range(24.0, 25.0, 2.0),
+            (23.5, 25.5),
         )
         self.assertEqual(
-            self.camera.expand_temperature_range(20.0, 30.0, 4.0),
+            self.camera.expand_temperature_range(20.0, 30.0, 2.0),
             (20.0, 30.0),
         )
 
