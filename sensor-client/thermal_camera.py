@@ -18,8 +18,6 @@ SIZE_PATTERN = re.compile(r"Size:\s+Discrete\s+(\d+)x(\d+)")
 MINIMUM_AUTO_DISPLAY_SPAN = 4.0
 TEMPORAL_FILTER_ALPHA = 0.35
 MOTION_THRESHOLD_CELSIUS = 1.0
-DEFAULT_ANCHOR_MINIMUM = 20.0
-DEFAULT_ANCHOR_MAXIMUM = 40.0
 
 
 @dataclass(frozen=True)
@@ -137,12 +135,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--anchor-min-temp",
         type=float,
-        default=DEFAULT_ANCHOR_MINIMUM,
     )
     parser.add_argument(
         "--anchor-max-temp",
         type=float,
-        default=DEFAULT_ANCHOR_MAXIMUM,
     )
     parser.add_argument(
         "--rotate",
@@ -411,7 +407,7 @@ class ThermalViewer:
         scale: int,
         palette: str,
         fixed_range: tuple[float, float] | None,
-        anchor_range: tuple[float, float],
+        anchor_range: tuple[float, float] | None,
         rotate: int,
         output_dir: Path,
         display_mode: str,
@@ -593,10 +589,11 @@ class ThermalViewer:
             *current_range,
             minimum_span=MINIMUM_AUTO_DISPLAY_SPAN,
         )
-        current_range = apply_temperature_anchor(
-            current_range,
-            self.anchor_range,
-        )
+        if self.anchor_range is not None:
+            current_range = apply_temperature_anchor(
+                current_range,
+                self.anchor_range,
+            )
         if self.previous_display_range is None:
             self.previous_display_range = current_range
             return current_range
@@ -834,8 +831,6 @@ def main() -> int:
             "--anchor-min-temp",
             "--anchor-max-temp",
         )
-        if anchor_range is None:
-            raise RuntimeError("기본 표시 온도 범위를 확인하지 못했습니다.")
         cv2, np = _load_runtime_dependencies()
         capture = ThermalCapture(
             device=device,

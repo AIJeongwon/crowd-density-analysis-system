@@ -35,6 +35,12 @@ class ThermalCameraTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.camera.validate_temperature_range(40.0, 20.0)
 
+    def test_uses_adaptive_display_range_by_default(self) -> None:
+        args = self.camera.build_parser().parse_args([])
+
+        self.assertIsNone(args.anchor_min_temp)
+        self.assertIsNone(args.anchor_max_temp)
+
     def test_validates_linux_video_device_path(self) -> None:
         self.assertEqual(
             self.camera.validate_device_path("/dev/video0"),
