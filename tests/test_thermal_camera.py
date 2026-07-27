@@ -61,6 +61,22 @@ class ThermalCameraTest(unittest.TestCase):
             (20.0, 30.0),
         )
 
+    def test_applies_absolute_temperature_anchor(self) -> None:
+        self.assertEqual(
+            self.camera.apply_temperature_anchor(
+                (27.0, 33.0),
+                (20.0, 40.0),
+            ),
+            (20.0, 40.0),
+        )
+        self.assertEqual(
+            self.camera.apply_temperature_anchor(
+                (5.0, 55.0),
+                (20.0, 40.0),
+            ),
+            (5.0, 55.0),
+        )
+
     def test_selects_y16_image_resolution_without_telemetry_rows(self) -> None:
         output = """
         [0]: 'UYVY' (UYVY 4:2:2)

@@ -18,6 +18,8 @@ SIZE_PATTERN = re.compile(r"Size:\s+Discrete\s+(\d+)x(\d+)")
 MINIMUM_AUTO_DISPLAY_SPAN = 4.0
 TEMPORAL_FILTER_ALPHA = 0.35
 MOTION_THRESHOLD_CELSIUS = 1.0
+DEFAULT_ANCHOR_MINIMUM = 20.0
+DEFAULT_ANCHOR_MAXIMUM = 40.0
 
 
 @dataclass(frozen=True)
@@ -38,13 +40,19 @@ def centikelvin_to_celsius(value: float) -> float:
 def validate_temperature_range(
     minimum: float | None,
     maximum: float | None,
+    minimum_option: str = "--min-temp",
+    maximum_option: str = "--max-temp",
 ) -> tuple[float, float] | None:
     if minimum is None and maximum is None:
         return None
     if minimum is None or maximum is None:
-        raise ValueError("--min-temp와 --max-temp는 함께 지정해야 합니다.")
+        raise ValueError(
+            f"{minimum_option}와 {maximum_option}는 함께 지정해야 합니다."
+        )
     if minimum >= maximum:
-        raise ValueError("--min-temp는 --max-temp보다 작아야 합니다.")
+        raise ValueError(
+            f"{minimum_option}는 {maximum_option}보다 작아야 합니다."
+        )
     return minimum, maximum
 
 
@@ -126,6 +134,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--min-temp", type=float)
     parser.add_argument("--max-temp", type=float)
+    parser.add_argument(
+        "--anchor-min-temp",
+        type=float,
+        default=DEFAULT_ANCHOR_MINIMUM,
+    )
+    parser.add_argument(
+        "--anchor-max-temp",
+        type=float,
+        default=DEFAULT_ANCHOR_MAXIMUM,
+    )
     parser.add_argument(
         "--rotate",
         type=int,
@@ -221,6 +239,16 @@ def expand_temperature_range(
     center = (minimum + maximum) / 2.0
     half_span = minimum_span / 2.0
     return center - half_span, center + half_span
+
+
+def apply_temperature_anchor(
+    display_range: tuple[float, float],
+    anchor_range: tuple[float, float],
+) -> tuple[float, float]:
+    return (
+        min(display_range[0], anchor_range[0]),
+        max(display_range[1], anchor_range[1]),
+    )
 
 
 def filter_display_temperature(
@@ -383,6 +411,7 @@ class ThermalViewer:
         scale: int,
         palette: str,
         fixed_range: tuple[float, float] | None,
+        anchor_range: tuple[float, float],
         rotate: int,
         output_dir: Path,
         display_mode: str,
@@ -393,6 +422,7 @@ class ThermalViewer:
         self.scale = scale
         self.palette = palette
         self.fixed_range = fixed_range
+        self.anchor_range = anchor_range
         self.rotate = rotate
         self.output_dir = output_dir
         self.display_mode = display_mode
@@ -562,6 +592,10 @@ class ThermalViewer:
         current_range = expand_temperature_range(
             *current_range,
             minimum_span=MINIMUM_AUTO_DISPLAY_SPAN,
+        )
+        current_range = apply_temperature_anchor(
+            current_range,
+            self.anchor_range,
         )
         if self.previous_display_range is None:
             self.previous_display_range = current_range
@@ -794,6 +828,14 @@ def main() -> int:
             raise ValueError("--scale은 1에서 10 사이여야 합니다.")
 
         fixed_range = validate_temperature_range(args.min_temp, args.max_temp)
+        anchor_range = validate_temperature_range(
+            args.anchor_min_temp,
+            args.anchor_max_temp,
+            "--anchor-min-temp",
+            "--anchor-max-temp",
+        )
+        if anchor_range is None:
+            raise RuntimeError("기본 표시 온도 범위를 확인하지 못했습니다.")
         cv2, np = _load_runtime_dependencies()
         capture = ThermalCapture(
             device=device,
@@ -808,6 +850,7 @@ def main() -> int:
             scale=args.scale,
             palette=args.palette,
             fixed_range=fixed_range,
+            anchor_range=anchor_range,
             rotate=args.rotate,
             output_dir=args.output_dir,
             display_mode=args.display_mode,
