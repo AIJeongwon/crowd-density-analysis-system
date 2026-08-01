@@ -25,6 +25,7 @@ build/
 # Logs
 *.log
 logs/
+.log_data/
 
 # Local data and generated outputs
 data/raw/
@@ -36,3 +37,6 @@ tmp/
 *.xlsx
 *.xls
 *.pdf
+
+# Backup files
+*.orig
