@@ -83,6 +83,26 @@ class ThermalCameraTest(unittest.TestCase):
             (5.0, 55.0),
         )
 
+    def test_keeps_marker_temperature_label_inside_image(self) -> None:
+        self.assertEqual(
+            self.camera.calculate_marker_label_origin(
+                marker=(315, 5),
+                radius=5,
+                text_size=(80, 10),
+                image_size=(320, 240),
+            ),
+            (226, 23),
+        )
+        self.assertEqual(
+            self.camera.calculate_marker_label_origin(
+                marker=(5, 235),
+                radius=5,
+                text_size=(80, 10),
+                image_size=(320, 240),
+            ),
+            (14, 227),
+        )
+
     def test_selects_y16_image_resolution_without_telemetry_rows(self) -> None:
         output = """
         [0]: 'UYVY' (UYVY 4:2:2)

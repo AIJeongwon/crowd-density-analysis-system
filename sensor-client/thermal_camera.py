@@ -270,6 +270,33 @@ def filter_display_temperature(
     ).astype(np.float32)
 
 
+def calculate_marker_label_origin(
+    marker: tuple[int, int],
+    radius: int,
+    text_size: tuple[int, int],
+    image_size: tuple[int, int],
+) -> tuple[int, int]:
+    marker_x, marker_y = marker
+    text_width, text_height = text_size
+    image_width, image_height = image_size
+    margin = 3
+
+    x = marker_x + radius + 4
+    baseline_y = marker_y - radius - 3
+    if x + text_width > image_width - margin:
+        x = marker_x - radius - text_width - 4
+    if baseline_y - text_height < margin:
+        baseline_y = marker_y + radius + text_height + 3
+
+    maximum_x = max(0, image_width - text_width - margin)
+    x = min(max(x, margin), maximum_x)
+    baseline_y = min(
+        max(baseline_y, text_height + margin),
+        image_height - margin,
+    )
+    return x, baseline_y
+
+
 def is_window_visible(cv2: Any, window_name: str) -> bool:
     try:
         return (
@@ -530,18 +557,26 @@ class ThermalViewer:
         )
 
         selected = self.selected_point or (width // 2, height // 2)
-        self._draw_marker(enlarged, selected, (80, 255, 120), "P")
+        self._draw_marker(
+            enlarged,
+            selected,
+            (80, 255, 120),
+            "P",
+            statistics.selected,
+        )
         self._draw_marker(
             enlarged,
             statistics.minimum_point,
             (255, 180, 40),
             "L",
+            statistics.minimum,
         )
         self._draw_marker(
             enlarged,
             statistics.maximum_point,
             (40, 80, 255),
             "H",
+            statistics.maximum,
         )
 
         panel_width = 260
@@ -625,6 +660,7 @@ class ThermalViewer:
         point: tuple[int, int],
         color: tuple[int, int, int],
         label: str,
+        temperature: float,
     ) -> None:
         x = point[0] * self.scale + self.scale // 2
         y = point[1] * self.scale + self.scale // 2
@@ -632,14 +668,40 @@ class ThermalViewer:
         self.cv2.circle(image, (x, y), radius, color, 1)
         self.cv2.line(image, (x - radius - 2, y), (x + radius + 2, y), color, 1)
         self.cv2.line(image, (x, y - radius - 2), (x, y + radius + 2), color, 1)
+        text = f"{label} {temperature:.2f} C"
+        font = self.cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.4
+        thickness = 1
+        (text_width, text_height), _baseline = self.cv2.getTextSize(
+            text,
+            font,
+            font_scale,
+            thickness,
+        )
+        text_origin = calculate_marker_label_origin(
+            marker=(x, y),
+            radius=radius,
+            text_size=(text_width, text_height),
+            image_size=(image.shape[1], image.shape[0]),
+        )
         self.cv2.putText(
             image,
-            label,
-            (x + radius + 3, y - radius - 2),
-            self.cv2.FONT_HERSHEY_SIMPLEX,
-            0.4,
+            text,
+            text_origin,
+            font,
+            font_scale,
+            (20, 20, 20),
+            3,
+            self.cv2.LINE_AA,
+        )
+        self.cv2.putText(
+            image,
+            text,
+            text_origin,
+            font,
+            font_scale,
             color,
-            1,
+            thickness,
             self.cv2.LINE_AA,
         )
 
