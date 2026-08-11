@@ -161,6 +161,10 @@ class LeptonSensorClientTest(unittest.TestCase):
 
         self.assertEqual(quiet_output.getvalue(), "")
         self.assertIn("shown", verbose_output.getvalue())
+        self.assertRegex(
+            verbose_output.getvalue(),
+            r"^\[\d{2}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\] ",
+        )
 
 
 class _FakeResponse:

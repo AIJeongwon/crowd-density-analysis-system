@@ -1,217 +1,128 @@
-# 센서 클라이언트
+# Raspberry Pi 엣지 센서 클라이언트
 
-이 폴더에는 CDAS 백엔드로 센서 데이터를 전송하는 세 가지 클라이언트가 있다.
+CDAS의 현재 센서 노드는 Raspberry Pi에서 Lepton 3.5 열화상 프레임과 SLAMTEC RPLIDAR C1 스캔을 결합하고, 모델이 추론한 인원 수만 백엔드로 전송한다. 원시 픽셀과 LiDAR 포인트는 서버로 보내지 않는다.
 
-- `mock_sensor_client.py`: 실제 장비 없이 열화상·LiDAR 데이터 흐름을 시험한다.
-- `raspberry_pi_sensor_client.py`: 센서 프로그램이 전처리한 지표를 전송한다.
-- `lepton_sensor_client.py`: PureThermal USB-UVC 보드에 연결된 Lepton 3.5의 Y16 프레임을 직접 수집하고 전송한다.
+## 스레드와 데이터 흐름
 
-모든 클라이언트는 Python 표준 라이브러리만 사용한다. Lepton 클라이언트는 프레임 수집을 위해 시스템의 `v4l2-ctl`을 추가로 사용한다.
+Main은 공유 큐와 종료 이벤트를 만들고 다음 5개 작업 스레드를 생성·감시·종료한다.
 
-## 백엔드 서버 준비
-
-라즈베리파이가 같은 네트워크에서 접근할 수 있도록 서버를 모든 네트워크 인터페이스에 바인딩한다.
-
-```bash
-python3 -m backend.app.server --host 0.0.0.0 --port 8000
+```text
+ThermalSensor ─> thermal queue ─┐
+                                ├─> Fusion ─> fused queue ─> ModelAdapter
+LidarSensor   ─> lidar queue   ─┘                                 │
+                                                                  ▼
+                                      single-slot mailbox ─> Communication
 ```
 
-정상 수신된 데이터는 서버 터미널에 한 줄로 기록된다. 수신한 Lepton 프레임을 열화상 PNG로 `.log_data/`에 저장하려면 `--logging` 옵션을 붙인다.
+- `ThermalSensor`: PureThermal USB-UVC 보드의 Lepton 3.5 Y16 프레임을 읽는다.
+- `LidarSensor`: C++ 브리지를 실행하여 C1의 완성된 스캔을 읽는다.
+- `Fusion`: `fusion.poll_interval_seconds`마다 두 센서 큐를 확인한다. 둘 다 있으면 가장 오래된 항목을 FIFO로 하나씩 결합한다. `flush_every_checks`번째 확인에서는 두 큐를 모두 비우고 결합을 건너뛴다. 기본 예시는 10회다.
+- `ModelAdapter`: 결합 데이터를 모델 플러그인에 전달해 `people_count`와 `confidence`를 얻는다.
+- `Communication`: 단일 슬롯 mailbox로 결과를 받아 서버에 전송하고 heartbeat를 확인한다. 슬롯이 빌 때까지 생산자가 대기하므로 전송 전 결과를 덮어쓰지 않는다.
 
-```bash
-python3 -m backend.app.server --host 0.0.0.0 --port 8000 --logging
-```
+복구할 수 없는 센서·모델·통신 오류는 Main에 전달되어 전체 프로세스를 종료한다. `Ctrl+C`도 모든 스레드와 공유 자원을 정상 종료한다.
 
-서버 PC의 방화벽에서 TCP 8000 포트 접근을 허용해야 한다. 외부 인터넷에 직접 노출하기 전에는 HTTPS와 센서 인증을 적용해야 한다.
+## 하드웨어 준비
 
-## 가상 센서 클라이언트
+필요한 환경:
 
-실제 센서 장비가 준비되기 전에 서버의 데이터 수집 흐름을 검증할 때 사용한다.
-
-```bash
-python3 sensor-client/mock_sensor_client.py --sensor-type both --cycles 10
-```
-
-열화상 또는 LiDAR 중 하나만 전송할 수도 있다.
-
-```bash
-python3 sensor-client/mock_sensor_client.py --sensor-type thermal --cycles 5
-python3 sensor-client/mock_sensor_client.py --sensor-type lidar --cycles 5
-```
-
-## 범용 Raspberry Pi 센서 클라이언트
-
-`raspberry_pi_sensor_client.py`는 라즈베리파이에서 전처리한 열화상 또는 LiDAR 지표를 CDAS 백엔드로 전송한다. 센서 원천 데이터 판독 방식은 장비마다 다르므로, 이 클라이언트는 센서 드라이버가 만든 지표를 전송하는 역할만 담당한다.
-
-### 단일 측정값 전송
-
-서버 PC의 LAN IP를 `--server-url`에 지정한다.
-
-```bash
-python3 sensor-client/raspberry_pi_sensor_client.py \
-  --server-url http://192.168.0.10:8000 \
-  --location-id moran-market-gate-1 \
-  --sensor-type thermal \
-  --device-id thermal-pi-001 \
-  --metrics-json '{"hotspot_count":12,"avg_temp":29.8,"max_temp":36.5,"valid":true}'
-```
-
-LiDAR 전송 예시:
-
-```bash
-python3 sensor-client/raspberry_pi_sensor_client.py \
-  --server-url http://192.168.0.10:8000 \
-  --location-id moran-market-gate-1 \
-  --sensor-type lidar \
-  --device-id lidar-pi-001 \
-  --metrics-json '{"object_count":15,"avg_distance":2.1,"min_distance":0.8,"valid":true}'
-```
-
-`--device-id`를 생략하면 `<라즈베리파이 호스트명>-<센서 타입>`을 사용한다.
-
-### 센서 코드에서 직접 사용
-
-센서 드라이버 코드와 `raspberry_pi_sensor_client.py`를 같은 디렉터리에 두면 일반 Python 모듈처럼 불러올 수 있다.
-
-```python
-import time
-
-from raspberry_pi_sensor_client import SensorClient
-
-
-client = SensorClient(
-    server_url="http://192.168.0.10:8000",
-    device_id="thermal-pi-001",
-    location_id="moran-market-gate-1",
-    timeout=5,
-    max_attempts=3,
-)
-
-while True:
-    # 아래 값은 사용하는 센서 드라이버에서 읽고 계산한다.
-    hotspot_count = 12
-    avg_temp = 29.8
-    max_temp = 36.5
-
-    client.send(
-        "thermal",
-        {
-            "hotspot_count": hotspot_count,
-            "avg_temp": avg_temp,
-            "max_temp": max_temp,
-            "valid": True,
-        },
-    )
-    time.sleep(5)
-```
-
-연결 실패, 타임아웃, HTTP 429 및 서버 오류는 지수 백오프로 재시도한다. 잘못된 요청을 의미하는 일반적인 HTTP 4xx 응답은 재시도하지 않는다.
-
-### JSON Lines 연속 전송
-
-기존 센서 프로그램이 한 줄에 하나씩 JSON 지표를 출력한다면 파이프로 연결할 수 있다.
-
-```bash
-python3 thermal_reader.py | python3 sensor-client/raspberry_pi_sensor_client.py \
-  --server-url http://192.168.0.10:8000 \
-  --location-id moran-market-gate-1 \
-  --sensor-type thermal \
-  --device-id thermal-pi-001
-```
-
-`thermal_reader.py`의 출력 형식:
-
-```json
-{"hotspot_count":12,"avg_temp":29.8,"max_temp":36.5,"valid":true}
-```
-
-성공한 요청마다 서버의 JSON 응답이 표준 출력에 한 줄씩 기록된다. 전송 실패 후 재시도도 모두 소진되면 종료 코드 1을 반환하므로 systemd의 `Restart=on-failure`와 함께 사용할 수 있다.
-
-### 환경 변수
-
-```bash
-export CDAS_SERVER_URL=http://192.168.0.10:8000
-export CDAS_API_KEY=replace-after-server-auth-is-added
-```
-
-현재 백엔드는 API 키를 검증하지 않는다. `CDAS_API_KEY`는 서버 인증 기능이 추가된 이후 사용할 수 있도록 전송 헤더만 미리 지원한다.
-
-## Lepton 3.5 센서 클라이언트
-
-`lepton_sensor_client.py`는 PureThermal 호환 USB-UVC 보드에 연결된 Lepton 3.5에서 160×120 Y16 프레임을 수집한다. 각 프레임은 `/tmp/rbp_client`에 임시 저장되고, 픽셀별 원시 센서값과 온도 요약 지표로 변환된 뒤 CDAS 백엔드로 전송된다.
-
-### 요구 사항
-
-- 32비트 또는 64비트 Linux가 설치된 Raspberry Pi
-- Lepton 3.5 및 PureThermal 호환 USB-UVC 보드
-- Python 3.9 이상
-- `v4l2-ctl`
-
-Raspberry Pi OS 또는 Debian/Ubuntu에서 V4L2 유틸리티를 설치한다.
+- Raspberry Pi의 32비트 또는 64비트 Linux와 Python 3.9 이상
+- FLIR Lepton 3.5와 PureThermal 호환 USB-UVC 보드
+- SLAMTEC RPLIDAR C1
+- `v4l2-ctl`, C++ 빌드 도구, C1 지원 RPLIDAR SDK 2.1.0 이상
 
 ```bash
 sudo apt update
-sudo apt install -y v4l-utils
+sudo apt install -y v4l-utils build-essential
 ```
 
-사용할 장치가 160×120 해상도의 `Y16 ` 형식을 제공하는지 확인한다. `Y16` FOURCC에는 마지막 공백 문자가 포함된다.
+### Lepton 3.5
+
+160×120 해상도의 `Y16 ` 형식을 제공하는지 확인한다. `Y16` FOURCC에는 마지막 공백 문자가 포함된다.
 
 ```bash
 v4l2-ctl --device=/dev/video0 --list-formats-ext
 ```
 
-Lepton은 다음과 같이 설정되어 있어야 한다.
+센서는 Radiometry 및 TLinear를 활성화하고, TLinear 해상도는 0.01 K, AGC는 비활성화해야 한다. Y16 프레임은 Raspberry Pi 내부 큐에서만 사용한다.
 
-- Radiometry: 활성화
-- TLinear: 활성화
-- TLinear 해상도: 0.01 K
-- AGC: 비활성화
+### RPLIDAR C1 브리지
 
-클라이언트는 각 Y16 값을 센티켈빈으로 간주하고 `섭씨 = 원시값 / 100 - 273.15` 공식을 사용한다.
-
-### 실행
-
-필수 옵션은 서버 주소(`--ip/-i`), V4L2 장치 경로(`--dev/-d`), 수집 간격(`--interval/-t`)이다. 실행 로그가 필요하면 값 없이 `--verbose/-v`를 추가한다.
+공식 SDK를 받은 뒤 Raspberry Pi에서 네이티브 빌드한다. x86 라이브러리를 ARM/aarch64 실행 파일에 링크할 수 없다.
 
 ```bash
-python3 sensor-client/lepton_sensor_client.py \
-  --ip 192.168.0.10 \
-  --dev /dev/video0 \
-  --interval 5 \
-  --verbose
+git clone https://github.com/Slamtec/rplidar_sdk.git
+make
 ```
 
-`--verbose`를 생략하면 실행 로그를 출력하지 않는다. 아래처럼 짧은 옵션도 사용할 수 있다.
+실행 파일은 `sensor-client/build/rplidar_c1_bridge`에 생성된다. C1은 보통 `/dev/ttyUSB0` 또는 `/dev/serial/by-id/...`로 나타난다. 단독 확인과 JSONL 계약은 [RPLIDAR_C1_BRIDGE.md](RPLIDAR_C1_BRIDGE.md)를 참고한다.
+
+## 환경 설정
+
+프로젝트 루트에서 예시를 클라이언트 디렉터리로 복사한다.
 
 ```bash
-python3 sensor-client/lepton_sensor_client.py \
-  -i http://192.168.0.10:9000 \
-  -d /dev/video0 \
-  -t 1.5
+cp environment.example.json sensor-client/environment.json
 ```
 
-스킴이나 포트를 생략한 서버 주소는 `http://<서버>:8000/api/sensor-readings`로 해석한다. 포트를 포함한 주소와 완전한 URL도 사용할 수 있다. 실행 로그는 `--verbose/-v` 옵션을 지정했을 때만 표준 오류로 출력된다.
+PowerShell:
 
-장치 ID 기본값은 `<호스트명>-lepton-3.5`이며 위치 ID 기본값은 호스트명이다. 위치 ID는 환경 변수로 변경할 수 있다.
+```powershell
+Copy-Item environment.example.json sensor-client/environment.json
+```
+
+| 항목                                       | 설명                                                  |
+| ------------------------------------------ | ----------------------------------------------------- |
+| `node.*`                                   | 노드와 설치 위치 ID                                   |
+| `thermal.*`                                | V4L2 장치, 수집 주기와 제한 시간                      |
+| `lidar.*`                                  | C1 브리지·직렬 장치, baud rate, scan mode와 제한 시간 |
+| `fusion.poll_interval_seconds`             | Fusion의 큐 확인 주기                                 |
+| `fusion.flush_every_checks`                | 두 센서 큐를 비우고 해당 결합을 건너뛰는 회차         |
+| `fusion.*_queue_size`                      | 공유 큐 최대 크기                                     |
+| `fusion.debug_dir`                         | 디버그 이미지 폴더. 예시는 `/tmp/cdas`                |
+| `model.adapter_module`, `model.model_path` | 모델 어댑터와 모델 파일                               |
+| `server.*`                                 | 백엔드 주소, 요청·heartbeat 시간과 연속 실패 한도     |
+
+상대 경로는 `environment.json` 위치를 기준으로 해석한다. 실제 장치, 서버 IP, ID, 모델 경로로 수정하며 운영 설정은 커밋하지 않는다.
+
+## 모델 플러그인
+
+`model.adapter_module`은 다음 계약의 `ModelAdapter`를 제공한다.
+
+```python
+class ModelAdapter:
+    def __init__(self, model_path):
+        # ONNX, TFLite, PyTorch 등 모델 초기화
+        ...
+
+    def infer(self, sensor_data):
+        return {"people_count": 12, "confidence": 0.91}
+```
+
+입력은 `fused_at`, `thermal: {captured_at, width, height, pixels}`, `lidar: {captured_at, sequence, points}` 구조다. 각 LiDAR point는 `(angle_deg, distance_mm, quality_raw)`다. 출력은 0 이상의 정수 `people_count`와 0~1 숫자 `confidence`여야 한다.
+
+모델 설정 또는 파일이 없으면 일반 모드는 오류로 종료한다. `--debug`에서는 오류 없이 추론과 결과 전송만 생략한다.
+
+## 실행
+
+프로젝트 루트에서 실행해도 클라이언트는 `sensor-client/environment.json`을 읽는다.
 
 ```bash
-export CDAS_LOCATION_ID=moran-market-gate-1
+python3 sensor-client/sensor_client.py [--debug] [--verbose]
 ```
 
-### 임시 파일과 재전송
+받는 옵션은 `--debug`, `--verbose`, 자동 제공되는 `--help`뿐이다.
 
-클라이언트는 먼저 `.part` 파일로 프레임을 수집하고 파일 크기가 정확히 38,400바이트인지 검사한다. 유효한 파일은 `.y16`으로 변경한 뒤 19,200개의 원시 픽셀값과 프레임 메타데이터를 포함한 JSON으로 전송한다.
-
-전송에 성공하면 임시 파일을 삭제한다. 전송에 실패한 파일은 `/tmp/rbp_client`에 유지하고 다음 수집 주기 또는 프로세스 재시작 후 타임스탬프 순서로 다시 전송한다.
-
-네트워크 장애가 길어지면 수집 주기마다 약 38.4KB가 누적된다. 운영 환경에서는 남은 공간을 감시하거나 `/tmp/rbp_client`를 충분한 크기의 임시 파일 시스템에 배치해야 한다.
-
-## 수신 확인
-
-서버의 최근 열화상 데이터는 다음 API로 확인할 수 있다.
+- `--debug`: Fusion이 결합 데이터를 큐에 넣기 전에 컬러 열화상과 검은 배경·흰 점의 LiDAR PNG를 `fusion.debug_dir`에 저장한다.
+- `--verbose`: 정상 센서 수집, Fusion 큐잉, 모델 추론, 정상 heartbeat 로그를 추가한다.
+- 기본 로그: `yy-mm-dd hh:mm:ss.ms`, 스레드 이름, 레벨, Main과 통신의 시작·종료, warning/error.
 
 ```bash
-curl "http://127.0.0.1:8000/api/readings/recent?limit=1&sensor_type=thermal"
+python3 sensor-client/sensor_client.py --debug --verbose
 ```
 
-서버를 `--logging` 옵션으로 실행했다면 `.log_data/`에 열화상 컬러 PNG가 생성된다. 서버를 재시작하면 메모리에 저장된 최근 측정값은 사라지지만 PNG 파일은 유지된다.
+통신은 `GET /health`와 `POST /api/inference-results`를 사용한다. 느린 요청과 통신 실패는 warning이며 연속 실패 한도에 도달하면 error로 전체를 종료한다. 원시 센서용 `/api/sensor-readings`와 서버 `--logging`은 제거되었다.
+
+## 호환 래퍼
+
+기존 센서 클라이언트 진입점은 과거 실행 명령과의 호환을 위한 deprecated wrapper로만 유지한다. 새 배포와 문서에서는 `sensor_client.py`를 사용한다. 호환 래퍼도 새 센서 파이프라인으로 라우팅하며 원시 센서 API를 사용하지 않는다.

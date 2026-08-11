@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+# Direct execution is a compatibility entry point for the sensor runtime.
+if __name__ == "__main__":
+    from sensor_client import main as _sensor_main
+
+    raise SystemExit(_sensor_main())
+
+
 import argparse
 import json
 import os
@@ -289,7 +296,9 @@ class LeptonSensorClient:
 
     def log(self, message: str) -> None:
         if self.verbose:
-            timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            timestamp = datetime.now().astimezone().strftime(
+                "%y-%m-%d %H:%M:%S.%f"
+            )[:-3]
             print(f"[{timestamp}] {message}", file=sys.stderr, flush=True)
 
 

@@ -2,19 +2,82 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
-import struct
-import zlib
+import threading
+from dataclasses import dataclass
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any, Mapping
 from urllib.parse import parse_qs, urlparse
 
-from .models import SensorReading, ValidationError
+from .models import (
+    InferenceResult,
+    LocationConfig,
+    ValidationError,
+    normalize_location_configs,
+)
 from .scoring import build_location_status
-from .store import ReadingStore
+from .store import InferenceStore
 
 
-STORE = ReadingStore()
+DEFAULT_ENVIRONMENT_PATH = Path(__file__).resolve().with_name("environment.json")
+
+
+@dataclass(frozen=True)
+class ServerEnvironment:
+    host: str
+    port: int
+    location_configs: dict[str, LocationConfig]
+
+
+def load_server_environment(path: str | Path) -> ServerEnvironment:
+    environment_path = Path(path)
+    try:
+        text = environment_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise ValidationError(
+            f"cannot read {environment_path}: {exc}"
+        ) from exc
+
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValidationError(
+            f"invalid JSON in {environment_path}: "
+            f"line {exc.lineno}, column {exc.colno}: {exc.msg}"
+        ) from exc
+
+    if not isinstance(payload, dict):
+        raise ValidationError("environment root must be a JSON object")
+
+    backend = payload.get("backend")
+    if not isinstance(backend, dict):
+        raise ValidationError("backend must be a JSON object")
+
+    host = backend.get("host")
+    if not isinstance(host, str) or not host.strip():
+        raise ValidationError("backend.host must be a non-empty string")
+    host = host.strip()
+
+    port = backend.get("port")
+    if (
+        isinstance(port, bool)
+        or not isinstance(port, int)
+        or not 1 <= port <= 65535
+    ):
+        raise ValidationError(
+            "backend.port must be an integer between 1 and 65535"
+        )
+
+    locations = payload.get("locations")
+    if not isinstance(locations, dict):
+        raise ValidationError("locations must be a JSON object")
+
+    return ServerEnvironment(
+        host=host,
+        port=port,
+        location_configs=normalize_location_configs(locations),
+    )
 
 
 class RequestHandler(BaseHTTPRequestHandler):
@@ -32,16 +95,16 @@ class RequestHandler(BaseHTTPRequestHandler):
             self._send_json(200, {"status": "ok"})
             return
 
-        if path_parts == ["api", "readings", "recent"]:
+        if path_parts == ["api", "inference-results", "recent"]:
             limit = _parse_int(query.get("limit", ["20"])[0], default=20)
-            sensor_type = query.get("sensor_type", [None])[0]
             location_id = query.get("location_id", [None])[0]
-            readings = STORE.recent(
+            node_id = query.get("node_id", [None])[0]
+            results = self._result_store().recent(
                 location_id=location_id,
-                sensor_type=sensor_type,
+                node_id=node_id,
                 limit=max(1, min(limit, 100)),
             )
-            self._send_json(200, {"readings": [reading.to_dict() for reading in readings]})
+            self._send_json(200, {"results": [result.to_dict() for result in results]})
             return
 
         if (
@@ -54,7 +117,8 @@ class RequestHandler(BaseHTTPRequestHandler):
             window_seconds = _parse_int(query.get("window_seconds", ["30"])[0], default=30)
             status = build_location_status(
                 location_id,
-                STORE.all(),
+                self._result_store().all(),
+                self._location_configs().get(location_id),
                 window_seconds=max(1, min(window_seconds, 3600)),
             )
             code = 200 if status["status"] == "OK" else 404
@@ -66,13 +130,13 @@ class RequestHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
 
-        if parsed.path != "/api/sensor-readings":
+        if parsed.path != "/api/inference-results":
             self._send_json(404, {"error": "not_found"})
             return
 
         try:
             payload = self._read_json_body()
-            reading = SensorReading.from_payload(payload)
+            result = InferenceResult.from_payload(payload)
         except ValidationError as exc:
             self._send_json(400, {"error": "validation_error", "message": str(exc)})
             return
@@ -80,13 +144,9 @@ class RequestHandler(BaseHTTPRequestHandler):
             self._send_json(400, {"error": "invalid_json"})
             return
 
-        STORE.add(reading)
-        process_received_reading(
-            reading,
-            logging_enabled=bool(getattr(self.server, "logging_enabled", False)),
-            log_dir=Path(getattr(self.server, "log_dir", Path(".log_data"))),
-        )
-        self._send_json(201, {"reading": reading.to_dict()})
+        self._result_store().add(result)
+        log_received_result(result)
+        self._send_json(201, {"result": result.to_dict()})
 
     def log_message(self, format: str, *args: object) -> None:
         return
@@ -127,156 +187,95 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
 
+    def _result_store(self) -> InferenceStore:
+        return getattr(self.server, "result_store")
 
-def log_received_reading(reading: SensorReading) -> None:
+    def _location_configs(self) -> dict[str, LocationConfig]:
+        return getattr(self.server, "location_configs")
+
+
+def log_received_result(result: InferenceResult) -> None:
+    write_log(
+        "received inference result: "
+        f"node_id={result.node_id} "
+        f"location_id={result.location_id} "
+        f"people_count={result.people_count} "
+        f"confidence={result.confidence:.3f}",
+        timestamp=result.received_at,
+    )
+
+
+def format_log_timestamp(timestamp: datetime | None = None) -> str:
+    value = timestamp or datetime.now().astimezone()
+    if value.tzinfo is not None:
+        value = value.astimezone()
+    return value.strftime("%y-%m-%d %H:%M:%S.%f")[:-3]
+
+
+def write_log(
+    message: str,
+    *,
+    timestamp: datetime | None = None,
+    level: str = "INFO",
+) -> None:
     print(
-        f"[{reading.received_at.isoformat()}] received sensor reading: "
-        f"device_id={reading.device_id} "
-        f"location_id={reading.location_id} "
-        f"sensor_type={reading.sensor_type} "
-        f"timestamp={reading.timestamp.isoformat()}",
+        f"{format_log_timestamp(timestamp)} {level} "
+        f"[{threading.current_thread().name}] {message}",
         flush=True,
     )
 
 
-def process_received_reading(
-    reading: SensorReading,
+def create_server(
+    host: str,
+    port: int,
     *,
-    logging_enabled: bool = False,
-    log_dir: Path = Path(".log_data"),
-) -> Path | None:
-    log_received_reading(reading)
-    if not logging_enabled:
-        return None
-
-    try:
-        image_path = save_thermal_image(reading, log_dir=log_dir)
-    except (OSError, ValueError) as exc:
-        print(f"failed to save thermal image: {exc}", flush=True)
-        return None
-
-    print(f"saved thermal image: {image_path}", flush=True)
-    return image_path
-
-
-def save_thermal_image(
-    reading: SensorReading,
-    *,
-    log_dir: Path = Path(".log_data"),
-) -> Path:
-    if reading.sensor_type != "thermal":
-        raise ValueError("image logging is only supported for thermal readings")
-
-    width = reading.metrics.get("width", 160)
-    height = reading.metrics.get("height", 120)
-    pixels = reading.metrics.get("pixels")
-    if isinstance(width, bool) or not isinstance(width, int) or width <= 0:
-        raise ValueError("metrics.width must be a positive integer")
-    if isinstance(height, bool) or not isinstance(height, int) or height <= 0:
-        raise ValueError("metrics.height must be a positive integer")
-    if not isinstance(pixels, list) or len(pixels) != width * height:
-        raise ValueError(f"metrics.pixels must contain {width * height} values")
-    if any(
-        isinstance(pixel, bool) or not isinstance(pixel, (int, float))
-        for pixel in pixels
-    ):
-        raise ValueError("metrics.pixels must contain only numbers")
-
-    minimum = min(pixels)
-    maximum = max(pixels)
-    if maximum == minimum:
-        intensities = bytes(len(pixels))
-    else:
-        scale = 255.0 / (maximum - minimum)
-        intensities = bytes(
-            max(0, min(255, round((pixel - minimum) * scale)))
-            for pixel in pixels
-        )
-
-    rgb_pixels = bytearray()
-    for intensity in intensities:
-        rgb_pixels.extend(_thermal_rgb(intensity))
-    row_stride = width * 3
-    scanlines = b"".join(
-        b"\x00" + rgb_pixels[row_start : row_start + row_stride]
-        for row_start in range(0, len(rgb_pixels), row_stride)
-    )
-    png = b"\x89PNG\r\n\x1a\n"
-    png += _png_chunk(
-        b"IHDR",
-        struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0),
-    )
-    png += _png_chunk(b"IDAT", zlib.compress(scanlines))
-    png += _png_chunk(b"IEND", b"")
-
-    log_dir.mkdir(parents=True, exist_ok=True)
-    safe_device_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", reading.device_id)
-    safe_device_id = safe_device_id.strip("._") or "thermal-sensor"
-    timestamp = reading.received_at.strftime("%Y%m%dT%H%M%S_%fZ")
-    image_path = log_dir / f"{timestamp}_{safe_device_id}.png"
-    temporary_path = image_path.with_suffix(".png.part")
-    temporary_path.write_bytes(png)
-    temporary_path.replace(image_path)
-    return image_path
-
-
-def _thermal_rgb(intensity: int) -> tuple[int, int, int]:
-    palette = (
-        (0, (0, 0, 0)),
-        (32, (0, 0, 96)),
-        (80, (72, 0, 160)),
-        (128, (192, 0, 96)),
-        (176, (255, 64, 0)),
-        (224, (255, 200, 0)),
-        (255, (255, 255, 255)),
-    )
-    for index in range(1, len(palette)):
-        lower_value, lower_color = palette[index - 1]
-        upper_value, upper_color = palette[index]
-        if intensity <= upper_value:
-            ratio = (intensity - lower_value) / (upper_value - lower_value)
-            return tuple(
-                round(lower + (upper - lower) * ratio)
-                for lower, upper in zip(lower_color, upper_color)
-            )
-    return palette[-1][1]
-
-
-def _png_chunk(chunk_type: bytes, data: bytes) -> bytes:
-    checksum = zlib.crc32(chunk_type + data) & 0xFFFFFFFF
-    return (
-        struct.pack(">I", len(data))
-        + chunk_type
-        + data
-        + struct.pack(">I", checksum)
-    )
-
-
-def run(host: str, port: int, logging_enabled: bool = False) -> None:
+    store: InferenceStore | None = None,
+    location_configs: Mapping[
+        str,
+        LocationConfig | Mapping[str, Any],
+    ]
+    | None = None,
+) -> ThreadingHTTPServer:
     server = ThreadingHTTPServer((host, port), RequestHandler)
-    server.logging_enabled = logging_enabled  # type: ignore[attr-defined]
-    server.log_dir = Path(".log_data")  # type: ignore[attr-defined]
-    mode = "logging" if logging_enabled else "normal"
-    print(f"CDAS backend listening on http://{host}:{port} ({mode} mode)")
-    server.serve_forever()
+    server.result_store = store or InferenceStore()  # type: ignore[attr-defined]
+    server.location_configs = normalize_location_configs(  # type: ignore[attr-defined]
+        location_configs
+    )
+    return server
+
+
+def run(
+    host: str,
+    port: int,
+    *,
+    location_configs: Mapping[
+        str,
+        LocationConfig | Mapping[str, Any],
+    ]
+    | None = None,
+) -> None:
+    with create_server(host, port, location_configs=location_configs) as server:
+        write_log(f"CDAS backend listening on http://{host}:{port}")
+        server.serve_forever()
 
 
 def main() -> None:
     parser = build_argument_parser()
-    args = parser.parse_args()
-    run(args.host, args.port, args.logging)
+    parser.parse_args()
+    try:
+        environment = load_server_environment(DEFAULT_ENVIRONMENT_PATH)
+    except ValidationError as exc:
+        parser.error(str(exc))
+
+    run(
+        environment.host,
+        environment.port,
+        location_configs=environment.location_configs,
+    )
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run the CDAS prototype backend.")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument(
-        "--logging",
-        action="store_true",
-        help="save received thermal frames as PNG",
-    )
-    return parser
+    return argparse.ArgumentParser(description="Run the CDAS prototype backend.")
 
 
 def _parse_int(value: str, *, default: int) -> int:

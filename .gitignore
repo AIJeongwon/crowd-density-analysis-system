@@ -8,6 +8,7 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+environment.json
 
 # Python
 __pycache__/
@@ -31,7 +32,12 @@ logs/
 data/raw/
 data/private/
 outputs/
+sensor-client/build/
+sensor-client/debug/
 tmp/
+
+# SDK source
+rplidar_sdk/
 
 # Program documents that should not be committed
 *.xlsx

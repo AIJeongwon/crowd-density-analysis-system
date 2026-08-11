@@ -4,6 +4,9 @@ import io
 import struct
 import tempfile
 import unittest
+
+raise unittest.SkipTest("server-side raw thermal image logging was retired")
+
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timezone
 from pathlib import Path

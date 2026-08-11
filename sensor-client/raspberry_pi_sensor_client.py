@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+# Direct execution is a compatibility entry point for the sensor runtime.
+if __name__ == "__main__":
+    from sensor_client import main as _sensor_main
+
+    raise SystemExit(_sensor_main())
+
+
 import argparse
 import json
 import os

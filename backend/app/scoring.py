@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from .models import SensorReading, ValidationError, metric_bool
+from .models import InferenceResult, LocationConfig
 
 
 DEFAULT_WINDOW_SECONDS = 30
@@ -11,7 +11,8 @@ DEFAULT_WINDOW_SECONDS = 30
 
 def build_location_status(
     location_id: str,
-    readings: list[SensorReading],
+    results: list[InferenceResult],
+    location_config: LocationConfig | None,
     *,
     window_seconds: int = DEFAULT_WINDOW_SECONDS,
     now: datetime | None = None,
@@ -19,83 +20,54 @@ def build_location_status(
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     window_start = now - timedelta(seconds=window_seconds)
 
-    latest_by_type: dict[str, SensorReading] = {}
-    for reading in readings:
-        if reading.location_id != location_id:
+    if location_config is None:
+        return _empty_status(
+            location_id,
+            status="LOCATION_NOT_CONFIGURED",
+            window_seconds=window_seconds,
+        )
+
+    latest: InferenceResult | None = None
+    for result in results:
+        if result.location_id != location_id:
             continue
-        if reading.received_at < window_start:
+        if result.received_at < window_start:
             continue
+        if latest is None or result.received_at > latest.received_at:
+            latest = result
 
-        previous = latest_by_type.get(reading.sensor_type)
-        if previous is None or reading.received_at > previous.received_at:
-            latest_by_type[reading.sensor_type] = reading
+    if latest is None:
+        status = _empty_status(
+            location_id,
+            status="NO_DATA",
+            window_seconds=window_seconds,
+        )
+        status.update(
+            area_m2=location_config.area_m2,
+            capacity=location_config.capacity,
+        )
+        return status
 
-    scores: list[tuple[str, float]] = []
-    sensor_summaries: dict[str, dict[str, Any]] = {}
-
-    thermal = latest_by_type.get("thermal")
-    if thermal is not None:
-        score = _thermal_score(thermal.metrics)
-        scores.append(("thermal", score))
-        sensor_summaries["thermal"] = _summarize_reading(thermal, score)
-
-    lidar = latest_by_type.get("lidar")
-    if lidar is not None:
-        score = _lidar_score(lidar.metrics)
-        scores.append(("lidar", score))
-        sensor_summaries["lidar"] = _summarize_reading(lidar, score)
-
-    if not scores:
-        return {
-            "location_id": location_id,
-            "status": "NO_DATA",
-            "congestion_score": None,
-            "congestion_level": "UNKNOWN",
-            "confidence": 0.0,
-            "window_seconds": window_seconds,
-            "sensors": {},
-        }
-
-    combined_score = round(sum(score for _, score in scores) / len(scores), 1)
-    confidence = _confidence(latest_by_type, expected_sensor_count=2)
+    density_per_m2 = latest.people_count / location_config.area_m2
+    occupancy_ratio = latest.people_count / location_config.capacity
+    congestion_score = round(min(occupancy_ratio * 100, 100.0), 1)
 
     return {
         "location_id": location_id,
         "status": "OK",
-        "congestion_score": combined_score,
-        "congestion_level": _level(combined_score),
-        "confidence": confidence,
+        "node_id": latest.node_id,
+        "measured_at": latest.timestamp.isoformat(),
+        "received_at": latest.received_at.isoformat(),
+        "people_count": latest.people_count,
+        "area_m2": location_config.area_m2,
+        "capacity": location_config.capacity,
+        "density_per_m2": round(density_per_m2, 4),
+        "occupancy_ratio": round(occupancy_ratio, 4),
+        "congestion_score": congestion_score,
+        "congestion_level": _level(congestion_score),
+        "confidence": latest.confidence,
         "window_seconds": window_seconds,
-        "sensors": sensor_summaries,
     }
-
-
-def _thermal_score(metrics: dict[str, Any]) -> float:
-    hotspot_count = _as_float(metrics.get("hotspot_count"), default=0)
-    valid = _is_valid(metrics)
-    score = min(max(hotspot_count, 0), 20) / 20 * 100
-    return round(score if valid else score * 0.4, 1)
-
-
-def _lidar_score(metrics: dict[str, Any]) -> float:
-    object_count = _as_float(metrics.get("object_count"), default=0)
-    avg_distance = _as_float(metrics.get("avg_distance"), default=5.0)
-    valid = _is_valid(metrics)
-
-    count_score = min(max(object_count, 0), 25) / 25 * 80
-    distance_bonus = max(0.0, min(20.0, (5.0 - avg_distance) / 5.0 * 20))
-    score = count_score + distance_bonus
-    return round(score if valid else score * 0.4, 1)
-
-
-def _confidence(readings_by_type: dict[str, SensorReading], expected_sensor_count: int) -> float:
-    available = len(readings_by_type)
-    if available == 0:
-        return 0.0
-    confidence = min(1.0, available / expected_sensor_count)
-    if available == expected_sensor_count:
-        confidence = 0.9
-    return round(confidence, 2)
 
 
 def _level(score: float) -> str:
@@ -106,26 +78,25 @@ def _level(score: float) -> str:
     return "HIGH"
 
 
-def _summarize_reading(reading: SensorReading, score: float) -> dict[str, Any]:
+def _empty_status(
+    location_id: str,
+    *,
+    status: str,
+    window_seconds: int,
+) -> dict[str, Any]:
     return {
-        "device_id": reading.device_id,
-        "sensor_type": reading.sensor_type,
-        "measured_at": reading.timestamp.isoformat(),
-        "received_at": reading.received_at.isoformat(),
-        "score": score,
-        "metrics": reading.metrics,
+        "location_id": location_id,
+        "status": status,
+        "node_id": None,
+        "measured_at": None,
+        "received_at": None,
+        "people_count": None,
+        "area_m2": None,
+        "capacity": None,
+        "density_per_m2": None,
+        "occupancy_ratio": None,
+        "congestion_score": None,
+        "congestion_level": "UNKNOWN",
+        "confidence": 0.0,
+        "window_seconds": window_seconds,
     }
-
-
-def _as_float(value: Any, *, default: float) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _is_valid(metrics: dict[str, Any]) -> bool:
-    try:
-        return metric_bool(metrics, "valid", default=True)
-    except ValidationError:
-        return False

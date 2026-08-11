@@ -84,6 +84,7 @@ class RaspberryPiSensorClientTest(unittest.TestCase):
         self.assertEqual(result["reading"]["sensor_type"], "lidar")
         self.assertEqual(sleep_calls, [0.25])
 
+    @unittest.skip("legacy raw endpoint was replaced by inference results")
     def test_sends_reading_to_backend(self) -> None:
         original_store = server.STORE
         server.STORE = ReadingStore()

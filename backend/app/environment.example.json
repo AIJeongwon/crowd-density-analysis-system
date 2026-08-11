@@ -1,0 +1,12 @@
+{
+  "backend": {
+    "host": "0.0.0.0",
+    "port": 8000
+  },
+  "locations": {
+    "moran-market-gate-1": {
+      "area_m2": 100.0,
+      "capacity": 50
+    }
+  }
+}

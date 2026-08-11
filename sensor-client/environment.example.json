@@ -1,0 +1,44 @@
+{
+  "node": {
+    "node_id": "raspberry-pi-001",
+    "location_id": "moran-market-gate-1"
+  },
+  "thermal": {
+    "device_path": "/dev/video0",
+    "capture_interval_seconds": 1.0,
+    "capture_timeout_seconds": 10.0
+  },
+  "lidar": {
+    "bridge_path": "build/rplidar_c1_bridge",
+    "device_path": "/dev/ttyUSB0",
+    "baud_rate": 460800,
+    "scan_mode": "Standard",
+    "timeout_ms": 2000
+  },
+  "fusion": {
+    "poll_interval_seconds": 1.0,
+    "flush_every_checks": 10,
+    "sensor_queue_size": 8,
+    "fused_queue_size": 2,
+    "debug_dir": "/tmp/cdas",
+    "lidar_image_size": 640,
+    "lidar_max_distance_m": 12.0
+  },
+  "model": {
+    "adapter_module": null,
+    "model_path": null
+  },
+  "server": {
+    "base_url": "http://0.0.0.0:8000",
+    "request_timeout_seconds": 5.0,
+    "heartbeat_interval_seconds": 10.0,
+    "heartbeat_warning_seconds": 1.0,
+    "max_consecutive_failures": 3
+  },
+  "locations": {
+    "moran-market-gate-1": {
+      "area_m2": 100.0,
+      "capacity": 50
+    }
+  }
+}
