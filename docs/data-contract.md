@@ -16,13 +16,13 @@ CDAS는 Lepton 3.5와 SLAMTEC RPLIDAR C1 원천 데이터를 Raspberry Pi에서 
 }
 ```
 
-| 필드 | 형식 | 설명 |
-| --- | --- | --- |
-| `node_id` | 비어 있지 않은 문자열 | 엣지 노드 식별자 |
-| `location_id` | 비어 있지 않은 문자열 | 서버의 위치 설정과 연결되는 ID |
-| `timestamp` | ISO 8601 문자열 | 센서 데이터를 결합한 시각 |
-| `people_count` | 0 이상의 정수 | 모델이 추론한 인원 수 |
-| `confidence` | 0~1 숫자 | 모델 추론 신뢰도 |
+| 필드           | 형식                  | 설명                           |
+| -------------- | --------------------- | ------------------------------ |
+| `node_id`      | 비어 있지 않은 문자열 | 엣지 노드 식별자               |
+| `location_id`  | 비어 있지 않은 문자열 | 서버의 위치 설정과 연결되는 ID |
+| `timestamp`    | ISO 8601 문자열       | 센서 데이터를 결합한 시각      |
+| `people_count` | 0 이상의 정수         | 모델이 추론한 인원 수          |
+| `confidence`   | 0~1 숫자              | 모델 추론 신뢰도               |
 
 정상 등록은 HTTP 201이며 서버가 `received_at`을 추가한다. 잘못된 형식은 HTTP 400으로 거부한다.
 
@@ -74,11 +74,11 @@ occupancy_ratio = people_count / capacity
 congestion_score = min(occupancy_ratio × 100, 100)
 ```
 
-| 점수 | 단계 |
-| --- | --- |
-| 35 미만 | `LOW` |
+| 점수            | 단계     |
+| --------------- | -------- |
+| 35 미만         | `LOW`    |
 | 35 이상 70 미만 | `MEDIUM` |
-| 70 이상 | `HIGH` |
+| 70 이상         | `HIGH`   |
 
 `GET /api/locations/{location_id}/status`로 조회한다. `window_seconds` query의 기본값은 30초다. 위치 설정이 없으면 `LOCATION_NOT_CONFIGURED`, 최근 결과가 없으면 `NO_DATA`다.
 
@@ -104,4 +104,4 @@ congestion_score = min(occupancy_ratio × 100, 100)
 - `GET /api/inference-results/recent?limit=20&location_id=...&node_id=...`: 최근 결과
 - `GET /api/locations/{location_id}/status?window_seconds=30`: 위치 혼잡도
 
-초기 원시 센서 API `/api/sensor-readings`, `/api/readings/recent`와 서버 `--logging`은 제거되었다. 디버그 이미지는 Raspberry Pi의 `/tmp/cdas`에만 저장한다.
+클라이언트는 heartbeat와 추론 결과 전송에 하나의 HTTP/1.1 연결을 재사용한다.

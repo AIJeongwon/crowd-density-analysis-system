@@ -27,15 +27,15 @@ cp environment.example.json backend/app/environment.json
 python3 -m backend.app.server
 ```
 
-서버는 추론 결과의 노드, 위치, 인원 수와 신뢰도를 `yy-mm-dd hh:mm:ss.ms` 시간 형식의 기본 로그로 출력한다. 현재 저장소는 메모리 기반이라 재시작하면 결과가 사라진다.
+서버는 추론 결과의 노드, 위치, 인원 수와 신뢰도를 `yy-mm-dd hh:mm:ss.ms` 시간 형식의 기본 로그로 출력한다. HTTP/1.1 keep-alive를 지원하여 한 연결에서 여러 요청을 처리한다. 현재 저장소는 메모리 기반이라 재시작하면 결과가 사라진다.
 
-HTTP 접근 정보와 검증된 수신 JSON 전체를 확인하려면 verbose 모드로 실행한다.
+HTTP 접근 정보와 검증된 수신 JSON 전체를 확인하려면 debug 모드로 실행한다.
 
 ```bash
-python3 -m backend.app.server --verbose
+python3 -m backend.app.server --debug
 ```
 
-verbose 로그에는 클라이언트 주소, HTTP 요청과 응답 상태, 수신 inference payload가 `DEBUG` 레벨로 출력된다.
+debug 로그에는 클라이언트 주소, HTTP 요청과 응답 상태, 수신 inference payload가 `DEBUG` 레벨로 출력된다.
 
 ## 엔드포인트
 

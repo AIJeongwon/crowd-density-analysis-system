@@ -31,7 +31,7 @@ Raspberry Pi 프로세스는 Main과 5개 작업 스레드로 구성된다.
 - LidarSensor: SLAMTEC C1 스캔
 - Fusion: 두 FIFO 큐를 설정 주기로 결합
 - ModelAdapter: 플러그인 모델로 인원 수 추론
-- Communication: 결과 전송과 heartbeat
+- Communication: 추론 결과와 heartbeat를 하나의 HTTP/1.1 연결로 전송
 - Main: 공유 자원, 생성·감시·정상 종료
 
 ## 주요 기능
@@ -43,7 +43,7 @@ Raspberry Pi 프로세스는 Main과 5개 작업 스레드로 구성된다.
 - 두 센서 FIFO 중합과 주기적 오래된 큐 정리
 - 프레임워크 독립 Python 모델 어댑터
 - 손실 없는 단일 슬롯 결과 전달
-- heartbeat, 지연 warning과 연속 실패 처리
+- HTTP/1.1 연결 재사용, 끊김 시 1회 재연결, 지연 warning과 연속 실패 처리
 - 디버그용 컬러 열화상 및 흑백 LiDAR 이미지
 - 위치별 밀도, 점유율과 혼잡도 API
 
@@ -72,10 +72,10 @@ make
 
 ```bash
 python3 -m backend.app.server
-python3 -m backend.app.server --verbose
+python3 -m backend.app.server --debug
 ```
 
-서버는 실행 위치와 관계없이 `backend/app/environment.json`을 읽는다. `--verbose/-v`를 사용하면 HTTP 접근 정보와 검증된 수신 JSON payload를 출력한다.
+서버는 실행 위치와 관계없이 `backend/app/environment.json`을 읽는다. `--debug/-d`를 사용하면 HTTP 접근 정보와 검증된 수신 JSON payload를 `DEBUG` 로그로 출력한다.
 
 Raspberry Pi 클라이언트:
 

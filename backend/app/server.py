@@ -82,6 +82,7 @@ def load_server_environment(path: str | Path) -> ServerEnvironment:
 
 class RequestHandler(BaseHTTPRequestHandler):
     server_version = "CDASPrototype/0.1"
+    protocol_version = "HTTP/1.1"
 
     def do_OPTIONS(self) -> None:
         self._send_empty(204)
@@ -150,7 +151,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         self._send_json(201, {"result": result.to_dict()})
 
     def log_message(self, format: str, *args: object) -> None:
-        if not self._verbose_enabled():
+        if not self._debug_enabled():
             return
         client_host, client_port = self.client_address[:2]
         write_log(
@@ -200,11 +201,11 @@ class RequestHandler(BaseHTTPRequestHandler):
     def _location_configs(self) -> dict[str, LocationConfig]:
         return getattr(self.server, "location_configs")
 
-    def _verbose_enabled(self) -> bool:
-        return bool(getattr(self.server, "verbose", False))
+    def _debug_enabled(self) -> bool:
+        return bool(getattr(self.server, "debug", False))
 
     def _log_inference_payload(self, result: InferenceResult) -> None:
-        if not self._verbose_enabled():
+        if not self._debug_enabled():
             return
         client_host, client_port = self.client_address[:2]
         payload = {
@@ -270,14 +271,14 @@ def create_server(
         LocationConfig | Mapping[str, Any],
     ]
     | None = None,
-    verbose: bool = False,
+    debug: bool = False,
 ) -> ThreadingHTTPServer:
     server = ThreadingHTTPServer((host, port), RequestHandler)
     server.result_store = store or InferenceStore()  # type: ignore[attr-defined]
     server.location_configs = normalize_location_configs(  # type: ignore[attr-defined]
         location_configs
     )
-    server.verbose = verbose  # type: ignore[attr-defined]
+    server.debug = debug  # type: ignore[attr-defined]
     return server
 
 
@@ -290,13 +291,13 @@ def run(
         LocationConfig | Mapping[str, Any],
     ]
     | None = None,
-    verbose: bool = False,
+    debug: bool = False,
 ) -> None:
     with create_server(
         host,
         port,
         location_configs=location_configs,
-        verbose=verbose,
+        debug=debug,
     ) as server:
         write_log(f"CDAS backend listening on http://{host}:{port}")
         server.serve_forever()
@@ -314,15 +315,15 @@ def main() -> None:
         environment.host,
         environment.port,
         location_configs=environment.location_configs,
-        verbose=args.verbose,
+        debug=args.debug,
     )
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the CDAS prototype backend.")
     parser.add_argument(
-        "-v",
-        "--verbose",
+        "-d",
+        "--debug",
         action="store_true",
         help="log HTTP access details and validated inference payloads",
     )

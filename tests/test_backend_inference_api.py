@@ -7,6 +7,7 @@ import threading
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta, timezone
+from http.client import HTTPConnection
 from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError
@@ -20,12 +21,14 @@ from backend.app.store import InferenceStore
 
 
 class ServerEnvironmentTest(unittest.TestCase):
-    def test_cli_accepts_verbose_long_and_short_flags(self) -> None:
+    def test_cli_accepts_debug_long_and_short_flags(self) -> None:
         parser = server_module.build_argument_parser()
 
-        self.assertFalse(parser.parse_args([]).verbose)
-        self.assertTrue(parser.parse_args(["--verbose"]).verbose)
-        self.assertTrue(parser.parse_args(["-v"]).verbose)
+        self.assertFalse(parser.parse_args([]).debug)
+        self.assertTrue(parser.parse_args(["--debug"]).debug)
+        self.assertTrue(parser.parse_args(["-d"]).debug)
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            parser.parse_args(["--verbose"])
 
     def test_log_timestamp_includes_two_digit_year_and_milliseconds(self) -> None:
         timestamp = datetime(2026, 8, 11, 12, 34, 56, 789123)
@@ -141,7 +144,7 @@ class ServerEnvironmentTest(unittest.TestCase):
                     environment_path,
                 ),
                 patch("backend.app.server.run") as run_mock,
-                patch("sys.argv", ["backend.app.server", "--verbose"]),
+                patch("sys.argv", ["backend.app.server", "--debug"]),
             ):
                 main()
 
@@ -149,7 +152,7 @@ class ServerEnvironmentTest(unittest.TestCase):
         args, kwargs = run_mock.call_args
         self.assertEqual(args, ("0.0.0.0", 8123))
         self.assertEqual(kwargs["location_configs"]["gate-1"].capacity, 20)
-        self.assertTrue(kwargs["verbose"])
+        self.assertTrue(kwargs["debug"])
 
     def test_main_prints_clear_error_and_exits_two(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -342,6 +345,36 @@ class InferenceApiTest(unittest.TestCase):
         self.assertEqual(recent["results"][0]["node_id"], "node-1")
         self.assertEqual(self.request("/api/sensor-readings", method="POST", payload={})[0], 404)
 
+    def test_http_11_connection_is_reused_and_responses_are_framed(self) -> None:
+        host, port = self.server.server_address
+        connection = HTTPConnection(host, port, timeout=2)
+        try:
+            connection.request("GET", "/health")
+            first_response = connection.getresponse()
+            first_body = first_response.read()
+            first_socket = connection.sock
+
+            self.assertEqual(first_response.version, 11)
+            self.assertFalse(first_response.will_close)
+            self.assertEqual(
+                int(first_response.getheader("Content-Length")),
+                len(first_body),
+            )
+            self.assertIsNotNone(first_socket)
+
+            connection.request("OPTIONS", "/api/inference-results")
+            second_response = connection.getresponse()
+            second_body = second_response.read()
+
+            self.assertEqual(second_response.status, 204)
+            self.assertEqual(second_response.version, 11)
+            self.assertFalse(second_response.will_close)
+            self.assertIsNone(second_response.getheader("Content-Length"))
+            self.assertEqual(second_body, b"")
+            self.assertIs(connection.sock, first_socket)
+        finally:
+            connection.close()
+
     def test_location_status_uses_latest_inference(self) -> None:
         self.post_result(people_count=8)
         status, body = self.request("/api/locations/gate-1/status")
@@ -368,7 +401,7 @@ class InferenceApiTest(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertEqual(body["error"], "validation_error")
 
-    def test_default_mode_suppresses_verbose_access_logs(self) -> None:
+    def test_default_mode_suppresses_debug_access_logs(self) -> None:
         output = io.StringIO()
 
         with redirect_stdout(output):
@@ -376,11 +409,11 @@ class InferenceApiTest(unittest.TestCase):
 
         self.assertEqual(output.getvalue(), "")
 
-    def test_verbose_logs_access_and_validated_inference_payload(self) -> None:
-        self.server.verbose = True
+    def test_debug_logs_access_and_validated_inference_payload(self) -> None:
+        self.server.debug = True
         output = io.StringIO()
         payload = {
-            "node_id": "node-verbose",
+            "node_id": "node-debug",
             "location_id": "gate-1",
             "timestamp": "2026-08-10T01:00:00Z",
             "people_count": 9,

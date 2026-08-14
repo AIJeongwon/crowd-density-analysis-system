@@ -18,7 +18,7 @@ LidarSensor   ─> lidar queue   ─┘                                 │
 - `LidarSensor`: C++ 브리지를 실행하여 C1의 완성된 스캔을 읽는다.
 - `Fusion`: `fusion.poll_interval_seconds`마다 두 센서 큐를 확인한다. 둘 다 있으면 가장 오래된 항목을 FIFO로 하나씩 결합한다. `flush_every_checks`번째 확인에서는 두 큐를 모두 비우고 결합을 건너뛴다. 기본 예시는 10회다.
 - `ModelAdapter`: 결합 데이터를 모델 플러그인에 전달해 `people_count`와 `confidence`를 얻는다.
-- `Communication`: 단일 슬롯 mailbox로 결과를 받아 서버에 전송하고 heartbeat를 확인한다. 슬롯이 빌 때까지 생산자가 대기하므로 전송 전 결과를 덮어쓰지 않는다.
+- `Communication`: 단일 슬롯 mailbox의 결과와 heartbeat를 하나의 HTTP/1.1 연결로 순차 전송한다. 슬롯이 빌 때까지 생산자가 대기하므로 전송 전 결과를 덮어쓰지 않는다.
 
 복구할 수 없는 센서·모델·통신 오류는 Main에 전달되어 전체 프로세스를 종료한다. `Ctrl+C`도 모든 스레드와 공유 자원을 정상 종료한다.
 
@@ -121,7 +121,7 @@ python3 sensor-client/sensor_client.py [--debug] [--verbose]
 python3 sensor-client/sensor_client.py --debug --verbose
 ```
 
-통신은 `GET /health`와 `POST /api/inference-results`를 사용한다. 느린 요청과 통신 실패는 warning이며 연속 실패 한도에 도달하면 error로 전체를 종료한다. 원시 센서용 `/api/sensor-readings`와 서버 `--logging`은 제거되었다.
+통신은 `GET /health`와 `POST /api/inference-results`에 연결 하나를 재사용한다. 연결 오류가 나면 기존 연결을 닫고 새 연결로 한 번 즉시 재시도하며, 두 시도가 모두 실패한 논리 요청만 연속 실패 1회로 계산한다. 느린 요청과 통신 실패는 warning이며 연속 실패 한도에 도달하면 error로 전체를 종료한다. 원시 센서용 `/api/sensor-readings`와 서버 `--logging`은 제거되었다.
 
 ## 호환 래퍼
 
