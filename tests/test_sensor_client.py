@@ -10,6 +10,7 @@ import tempfile
 import threading
 import unittest
 from contextlib import redirect_stderr
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -216,7 +217,7 @@ class FusionWorkerTest(unittest.TestCase):
 
 
 class AdapterAndMailboxTest(unittest.TestCase):
-    def test_debug_mode_allows_missing_model(self) -> None:
+    def test_debug_mode_enables_random_fallback_without_adapter_module(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             environment = make_environment(Path(temporary_directory))
             worker = ModelAdapterWorker(
@@ -229,6 +230,139 @@ class AdapterAndMailboxTest(unittest.TestCase):
                 verbose=False,
             )
             self.assertIsNone(worker._load_adapter())
+            self.assertTrue(worker._random_fallback_enabled)
+
+    def test_debug_mode_enables_random_fallback_for_missing_adapter_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            environment = replace(
+                make_environment(root),
+                model=ModelConfig(
+                    adapter_module=root / "missing_adapter.py",
+                    model_path=root / "model.bin",
+                ),
+            )
+            worker = ModelAdapterWorker(
+                environment=environment,
+                fused_queue=queue.Queue(),
+                mailbox=ResultMailbox(),
+                stop_event=threading.Event(),
+                failure_queue=queue.Queue(),
+                debug=True,
+                verbose=False,
+            )
+
+            self.assertIsNone(worker._load_adapter())
+            self.assertTrue(worker._random_fallback_enabled)
+
+    def test_debug_mode_skips_when_only_model_file_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            adapter_path = root / "adapter.py"
+            adapter_path.write_text("class ModelAdapter: pass\n", encoding="utf-8")
+            environment = replace(
+                make_environment(root),
+                model=ModelConfig(
+                    adapter_module=adapter_path,
+                    model_path=root / "missing_model.bin",
+                ),
+            )
+            worker = ModelAdapterWorker(
+                environment=environment,
+                fused_queue=queue.Queue(),
+                mailbox=ResultMailbox(),
+                stop_event=threading.Event(),
+                failure_queue=queue.Queue(),
+                debug=True,
+                verbose=False,
+            )
+
+            self.assertIsNone(worker._load_adapter())
+            self.assertFalse(worker._random_fallback_enabled)
+
+    def test_debug_mode_does_not_hide_adapter_import_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            adapter_path = root / "adapter.py"
+            adapter_path.write_text(
+                "raise RuntimeError('broken import')\n",
+                encoding="utf-8",
+            )
+            model_path = root / "model.bin"
+            model_path.write_bytes(b"model")
+            environment = replace(
+                make_environment(root),
+                model=ModelConfig(
+                    adapter_module=adapter_path,
+                    model_path=model_path,
+                ),
+            )
+            worker = ModelAdapterWorker(
+                environment=environment,
+                fused_queue=queue.Queue(),
+                mailbox=ResultMailbox(),
+                stop_event=threading.Event(),
+                failure_queue=queue.Queue(),
+                debug=True,
+                verbose=False,
+            )
+
+            with self.assertRaisesRegex(ModelError, "failed to import"):
+                worker._load_adapter()
+            self.assertFalse(worker._random_fallback_enabled)
+
+    def test_debug_random_fallback_publishes_result_and_logs_when_verbose(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            environment = make_environment(Path(temporary_directory))
+            now = datetime.now(timezone.utc)
+            fused_queue: queue.Queue[FusedSensorData] = queue.Queue()
+            fused_queue.put(
+                FusedSensorData(
+                    now,
+                    ThermalFrame(now, (30000,), width=1, height=1),
+                    LidarScan(now, 1, ((0.0, 1000.0, 10),)),
+                )
+            )
+            mailbox = ResultMailbox()
+            stop_event = threading.Event()
+            failure_queue: queue.Queue = queue.Queue()
+            worker = ModelAdapterWorker(
+                environment=environment,
+                fused_queue=fused_queue,
+                mailbox=mailbox,
+                stop_event=stop_event,
+                failure_queue=failure_queue,
+                debug=True,
+                verbose=True,
+                random_people_count=lambda: 17,
+            )
+
+            with self.assertLogs("cdas.sensor_client", level="INFO") as logs:
+                worker.start()
+                try:
+                    result = mailbox.take(1.0, stop_event)
+                finally:
+                    stop_event.set()
+                    mailbox.close()
+                    worker.join(timeout=1.0)
+
+            self.assertIsNotNone(result)
+            assert result is not None
+            self.assertEqual(result.people_count, 17)
+            self.assertEqual(result.confidence, 0.0)
+            self.assertEqual(result.node_id, "pi-001")
+            self.assertEqual(result.location_id, "gate-1")
+            self.assertTrue(failure_queue.empty())
+            self.assertFalse(worker.is_alive())
+            self.assertTrue(
+                any(
+                    "random inference queued for server people_count=17"
+                    in message
+                    for message in logs.output
+                )
+            )
 
     def test_normal_mode_rejects_missing_model(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

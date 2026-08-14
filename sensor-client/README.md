@@ -101,7 +101,7 @@ class ModelAdapter:
 
 입력은 `fused_at`, `thermal: {captured_at, width, height, pixels}`, `lidar: {captured_at, sequence, points}` 구조다. 각 LiDAR point는 `(angle_deg, distance_mm, quality_raw)`다. 출력은 0 이상의 정수 `people_count`와 0~1 숫자 `confidence`여야 한다.
 
-모델 설정 또는 파일이 없으면 일반 모드는 오류로 종료한다. `--debug`에서는 오류 없이 추론과 결과 전송만 생략한다.
+adapter module 경로가 없거나 파일을 찾지 못하면 일반 모드는 오류로 종료한다. `--debug`에서는 0~50의 임의 인원 수와 신뢰도 0.0을 생성해 통신 스레드로 전달한다. `--verbose`를 함께 사용하면 생성한 값이 서버 전송용으로 큐잉되었음을 ModelAdapter 로그로 출력한다. adapter module은 있지만 모델 파일만 없는 경우에는 기존처럼 추론과 전송을 생략한다.
 
 ## 실행
 

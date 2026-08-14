@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import queue
+import random
 import threading
 from datetime import timezone
 from pathlib import Path
@@ -20,6 +21,11 @@ from shared_runtime import (
 )
 
 
+DEBUG_RANDOM_PEOPLE_MIN = 0
+DEBUG_RANDOM_PEOPLE_MAX = 50
+DEBUG_RANDOM_CONFIDENCE = 0.0
+
+
 class ModelAdapterWorker(ManagedWorker):
     def __init__(
         self,
@@ -32,6 +38,7 @@ class ModelAdapterWorker(ManagedWorker):
         debug: bool,
         verbose: bool,
         adapter_loader: Callable[[Path, Path], InferenceAdapter] | None = None,
+        random_people_count: Callable[[], int] | None = None,
     ) -> None:
         super().__init__(
             name="ModelAdapter",
@@ -44,6 +51,10 @@ class ModelAdapterWorker(ManagedWorker):
         self.mailbox = mailbox
         self.debug = debug
         self.adapter_loader = adapter_loader or load_model_adapter
+        self.random_people_count = (
+            random_people_count or generate_debug_people_count
+        )
+        self._random_fallback_enabled = False
 
     def run_worker(self) -> None:
         adapter = self._load_adapter()
@@ -53,31 +64,70 @@ class ModelAdapterWorker(ManagedWorker):
             except queue.Empty:
                 continue
             if adapter is None:
-                continue
-
-            self.verbose_info("running crowd inference model")
-            output = adapter.infer(to_model_input(fused))
-            result = parse_inference_output(output, fused, self.environment)
+                if not self._random_fallback_enabled:
+                    continue
+                result = parse_inference_output(
+                    {
+                        "people_count": self.random_people_count(),
+                        "confidence": DEBUG_RANDOM_CONFIDENCE,
+                    },
+                    fused,
+                    self.environment,
+                )
+            else:
+                self.verbose_info("running crowd inference model")
+                output = adapter.infer(to_model_input(fused))
+                result = parse_inference_output(output, fused, self.environment)
             if not self.mailbox.publish(result, self.stop_event):
                 return
+            if adapter is None:
+                self.verbose_info(
+                    "debug mode: random inference queued for server "
+                    "people_count=%d confidence=%.3f",
+                    result.people_count,
+                    result.confidence,
+                )
 
     def _load_adapter(self) -> InferenceAdapter | None:
         model = self.environment.model
-        if model.adapter_module is None or model.model_path is None:
+        self._random_fallback_enabled = False
+        if model.adapter_module is None:
             if self.debug:
+                self._random_fallback_enabled = True
                 self.verbose_info(
-                    "debug mode: model is not configured; inference is skipped"
+                    "debug mode: model adapter module is not configured; "
+                    "random inference fallback is enabled"
                 )
                 return None
-            raise ModelError("model.adapter_module and model.model_path are required")
-        if not model.adapter_module.is_file() or not model.model_path.is_file():
+            raise ModelError("model.adapter_module is required")
+        if not model.adapter_module.is_file():
             if self.debug:
+                self._random_fallback_enabled = True
                 self.verbose_info(
-                    "debug mode: model files are missing; inference is skipped"
+                    "debug mode: model adapter module was not found; "
+                    "random inference fallback is enabled"
                 )
                 return None
-            raise ModelError("configured model adapter or model file does not exist")
+            raise ModelError("configured model adapter module does not exist")
+        if model.model_path is None:
+            if self.debug:
+                self.verbose_info(
+                    "debug mode: model path is not configured; inference is skipped"
+                )
+                return None
+            raise ModelError("model.model_path is required")
+        if not model.model_path.is_file():
+            if self.debug:
+                self.verbose_info(
+                    "debug mode: model file was not found; inference is skipped"
+                )
+                return None
+            raise ModelError("configured model file does not exist")
         return self.adapter_loader(model.adapter_module, model.model_path)
+
+
+def generate_debug_people_count() -> int:
+    return random.randint(DEBUG_RANDOM_PEOPLE_MIN, DEBUG_RANDOM_PEOPLE_MAX)
 
 
 def load_model_adapter(adapter_path: Path, model_path: Path) -> InferenceAdapter:

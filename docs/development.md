@@ -55,7 +55,7 @@ docs: update inference result contract
 - 0 이상의 정수 `people_count`
 - 0~1의 유한한 `confidence`
 - 모델 예외가 Main까지 전파되는지
-- `--debug`에서 모델 없이 전송을 생략하는지
+- `--debug`에서 adapter module 누락 시 임의 인원 수를 전송하는지
 
 ## 테스트
 

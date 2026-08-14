@@ -141,7 +141,10 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--debug",
         action="store_true",
-        help="save fused sensor debug images and allow a missing model",
+        help=(
+            "save fused sensor debug images and use random inference when "
+            "the adapter module is unavailable"
+        ),
     )
     parser.add_argument(
         "--verbose",

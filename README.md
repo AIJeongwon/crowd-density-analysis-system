@@ -72,9 +72,10 @@ make
 
 ```bash
 python3 -m backend.app.server
+python3 -m backend.app.server --verbose
 ```
 
-서버는 실행 위치와 관계없이 `backend/app/environment.json`을 읽는다.
+서버는 실행 위치와 관계없이 `backend/app/environment.json`을 읽는다. `--verbose/-v`를 사용하면 HTTP 접근 정보와 검증된 수신 JSON payload를 출력한다.
 
 Raspberry Pi 클라이언트:
 
@@ -83,7 +84,7 @@ python3 sensor-client/sensor_client.py
 python3 sensor-client/sensor_client.py --debug --verbose
 ```
 
-클라이언트 옵션은 `--debug`, `--verbose`, `--help`뿐이다. IP, 장치, 주기와 모델 경로는 `sensor-client/environment.json`에서 읽는다. `--debug`는 모델이 없어도 센서 수집·중합·heartbeat를 실행하고 결과 전송은 생략한다.
+클라이언트 옵션은 `--debug`, `--verbose`, `--help`뿐이다. IP, 장치, 주기와 모델 경로는 `sensor-client/environment.json`에서 읽는다. `--debug`에서 adapter module 경로가 없거나 파일을 찾지 못하면 0~50의 임의 인원 수와 신뢰도 0.0을 서버로 전송한다.
 
 ```bash
 curl http://127.0.0.1:8000/api/locations/moran-market-gate-1/status

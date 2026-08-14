@@ -144,12 +144,19 @@ class RequestHandler(BaseHTTPRequestHandler):
             self._send_json(400, {"error": "invalid_json"})
             return
 
+        self._log_inference_payload(result)
         self._result_store().add(result)
         log_received_result(result)
         self._send_json(201, {"result": result.to_dict()})
 
     def log_message(self, format: str, *args: object) -> None:
-        return
+        if not self._verbose_enabled():
+            return
+        client_host, client_port = self.client_address[:2]
+        write_log(
+            f"HTTP client={client_host}:{client_port} {format % args}",
+            level="DEBUG",
+        )
 
     def _read_json_body(self) -> dict:
         try:
@@ -193,6 +200,34 @@ class RequestHandler(BaseHTTPRequestHandler):
     def _location_configs(self) -> dict[str, LocationConfig]:
         return getattr(self.server, "location_configs")
 
+    def _verbose_enabled(self) -> bool:
+        return bool(getattr(self.server, "verbose", False))
+
+    def _log_inference_payload(self, result: InferenceResult) -> None:
+        if not self._verbose_enabled():
+            return
+        client_host, client_port = self.client_address[:2]
+        payload = {
+            "node_id": result.node_id,
+            "location_id": result.location_id,
+            "timestamp": result.timestamp.isoformat(),
+            "people_count": result.people_count,
+            "confidence": result.confidence,
+        }
+        compact_payload = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        write_log(
+            "incoming inference payload "
+            f"client={client_host}:{client_port} "
+            f"method={self.command} path={self.path} "
+            f"payload={compact_payload}",
+            level="DEBUG",
+        )
+
 
 def log_received_result(result: InferenceResult) -> None:
     write_log(
@@ -235,12 +270,14 @@ def create_server(
         LocationConfig | Mapping[str, Any],
     ]
     | None = None,
+    verbose: bool = False,
 ) -> ThreadingHTTPServer:
     server = ThreadingHTTPServer((host, port), RequestHandler)
     server.result_store = store or InferenceStore()  # type: ignore[attr-defined]
     server.location_configs = normalize_location_configs(  # type: ignore[attr-defined]
         location_configs
     )
+    server.verbose = verbose  # type: ignore[attr-defined]
     return server
 
 
@@ -253,15 +290,21 @@ def run(
         LocationConfig | Mapping[str, Any],
     ]
     | None = None,
+    verbose: bool = False,
 ) -> None:
-    with create_server(host, port, location_configs=location_configs) as server:
+    with create_server(
+        host,
+        port,
+        location_configs=location_configs,
+        verbose=verbose,
+    ) as server:
         write_log(f"CDAS backend listening on http://{host}:{port}")
         server.serve_forever()
 
 
 def main() -> None:
     parser = build_argument_parser()
-    parser.parse_args()
+    args = parser.parse_args()
     try:
         environment = load_server_environment(DEFAULT_ENVIRONMENT_PATH)
     except ValidationError as exc:
@@ -271,11 +314,19 @@ def main() -> None:
         environment.host,
         environment.port,
         location_configs=environment.location_configs,
+        verbose=args.verbose,
     )
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
-    return argparse.ArgumentParser(description="Run the CDAS prototype backend.")
+    parser = argparse.ArgumentParser(description="Run the CDAS prototype backend.")
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="log HTTP access details and validated inference payloads",
+    )
+    return parser
 
 
 def _parse_int(value: str, *, default: int) -> int:

@@ -20,6 +20,13 @@ from backend.app.store import InferenceStore
 
 
 class ServerEnvironmentTest(unittest.TestCase):
+    def test_cli_accepts_verbose_long_and_short_flags(self) -> None:
+        parser = server_module.build_argument_parser()
+
+        self.assertFalse(parser.parse_args([]).verbose)
+        self.assertTrue(parser.parse_args(["--verbose"]).verbose)
+        self.assertTrue(parser.parse_args(["-v"]).verbose)
+
     def test_log_timestamp_includes_two_digit_year_and_milliseconds(self) -> None:
         timestamp = datetime(2026, 8, 11, 12, 34, 56, 789123)
         self.assertEqual(
@@ -134,7 +141,7 @@ class ServerEnvironmentTest(unittest.TestCase):
                     environment_path,
                 ),
                 patch("backend.app.server.run") as run_mock,
-                patch("sys.argv", ["backend.app.server"]),
+                patch("sys.argv", ["backend.app.server", "--verbose"]),
             ):
                 main()
 
@@ -142,6 +149,7 @@ class ServerEnvironmentTest(unittest.TestCase):
         args, kwargs = run_mock.call_args
         self.assertEqual(args, ("0.0.0.0", 8123))
         self.assertEqual(kwargs["location_configs"]["gate-1"].capacity, 20)
+        self.assertTrue(kwargs["verbose"])
 
     def test_main_prints_clear_error_and_exits_two(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -359,6 +367,45 @@ class InferenceApiTest(unittest.TestCase):
         )
         self.assertEqual(status, 400)
         self.assertEqual(body["error"], "validation_error")
+
+    def test_default_mode_suppresses_verbose_access_logs(self) -> None:
+        output = io.StringIO()
+
+        with redirect_stdout(output):
+            self.assertEqual(self.request("/health")[0], 200)
+
+        self.assertEqual(output.getvalue(), "")
+
+    def test_verbose_logs_access_and_validated_inference_payload(self) -> None:
+        self.server.verbose = True
+        output = io.StringIO()
+        payload = {
+            "node_id": "node-verbose",
+            "location_id": "gate-1",
+            "timestamp": "2026-08-10T01:00:00Z",
+            "people_count": 9,
+            "confidence": 0.85,
+            "secret": "must-not-be-logged",
+        }
+
+        with redirect_stdout(output):
+            self.assertEqual(self.request("/health")[0], 200)
+            self.assertEqual(
+                self.request(
+                    "/api/inference-results",
+                    method="POST",
+                    payload=payload,
+                )[0],
+                201,
+            )
+
+        logs = output.getvalue()
+        self.assertIn("DEBUG", logs)
+        self.assertIn('"GET /health HTTP/1.1" 200', logs)
+        self.assertIn("incoming inference payload", logs)
+        self.assertIn('"people_count":9', logs)
+        self.assertIn("received inference result", logs)
+        self.assertNotIn("must-not-be-logged", logs)
 
 
 if __name__ == "__main__":
