@@ -20,6 +20,14 @@ def load_thermal_camera() -> ModuleType:
     )
 
 
+def load_thermal_person_detector() -> ModuleType:
+    load_thermal_camera()
+    return load_sensor_client_module(
+        "thermal_person_detector.py",
+        "thermal_person_detector",
+    )
+
+
 def load_sensor_client_module(filename: str, module_name: str) -> ModuleType:
     root = Path(__file__).resolve().parents[1]
     module_path = root / "sensor-client" / filename

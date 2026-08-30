@@ -29,6 +29,7 @@ logs/
 # Local data and generated outputs
 data/raw/
 data/private/
+models/
 outputs/
 tmp/
 
