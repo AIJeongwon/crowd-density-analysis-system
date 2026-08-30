@@ -121,9 +121,21 @@ python3 sensor-client/thermal_camera.py --rotate 90
 
 `thermal_person_detector.py`는 LLVIP 적외선 영상으로 학습된 공개 YOLOv5 모델을 이용해 열화상에서 사람을 시험 검출합니다. PureThermal의 컬러 팔레트 화면이 아니라 Y16 온도 프레임을 흑백 적외선 영상으로 변환해 모델에 입력하며, 화면에는 사람 영역과 신뢰도, 검출 인원수, 추론 시간이 표시됩니다. 영상은 저장하거나 서버로 전송하지 않습니다.
 
-LLVIP에서 공개한 모델은 YOLOv5l 기반 PyTorch 가중치입니다. Raspberry Pi 5 2GB에서 PyTorch를 함께 실행하는 부담을 줄이기 위해 PC에서 ONNX로 한 번 변환하고, 라즈베리파이에서는 CPU용 ONNX Runtime으로 실행합니다. 모델 파일과 원본 압축 파일은 크기와 배포 조건 때문에 저장소에 커밋하지 않고 `models/`에 둡니다.
+LLVIP에서 공개한 모델은 YOLOv5l 기반 PyTorch 가중치입니다. Raspberry Pi 5 2GB에서 PyTorch를 함께 실행하는 부담을 줄이기 위해 ONNX로 변환한 모델을 CPU용 ONNX Runtime으로 실행합니다. 실행용 모델은 GitHub의 일반 파일 제한을 넘기 때문에 저장소에는 커밋하지 않고 Release에서 제공합니다.
 
 ### 모델 준비
+
+Raspberry Pi용 160 입력 ONNX 모델을 프로젝트 루트에서 내려받습니다.
+
+```bash
+mkdir -p models
+curl -L \
+  https://github.com/AIJeongwon/crowd-density-analysis-system/releases/download/llvip-yolov5l-160-v1/llvip-yolov5l-160.onnx \
+  -o models/llvip-yolov5l-160.onnx
+echo "f553ac510ee4cfe50adc618c86403c4f8a0dfb07e7032b709c44369473285d2a  models/llvip-yolov5l-160.onnx" | sha256sum --check
+```
+
+직접 변환하거나 다른 입력 크기를 비교하려면 다음 절차를 사용합니다.
 
 1. [LLVIP 공식 저장소](https://github.com/bupt-ai-cz/LLVIP)의 `Google-Drive-Yolov5-model` 링크에서 `yolov5_trained_model.rar`를 내려받아 압축을 풉니다. 압축 파일에 포함된 두 가중치 중 열화상용 `yolov5_infrared.pt`를 사용합니다.
 2. PC에 Python 3.12 일회성 가상 환경을 만들고 공식 저장소의 YOLOv5 코드를 준비합니다. 아래 조합은 실제 ONNX 변환을 확인한 버전입니다.
@@ -174,8 +186,8 @@ python -m pip install onnxruntime
 ```bash
 python sensor-client/thermal_person_detector.py \
   --device /dev/video0 \
-  --model models/llvip-yolov5l-320.onnx \
-  --input-size 320
+  --model models/llvip-yolov5l-160.onnx \
+  --input-size 160
 ```
 
 기본 `synchronized` 표시 모드는 검출에 사용한 프레임과 박스를 함께 표시합니다. 추론은 CPU 부하를 줄이기 위해 기본 초당 4회로 제한하며, 상단 `FPS`도 실제 추론 주기를 표시합니다. 다른 주기를 시험할 때는 `--inference-fps`를 지정합니다.
@@ -183,8 +195,8 @@ python sensor-client/thermal_person_detector.py \
 ```bash
 python sensor-client/thermal_person_detector.py \
   --device /dev/video0 \
-  --model models/llvip-yolov5l-320.onnx \
-  --input-size 320 \
+  --model models/llvip-yolov5l-160.onnx \
+  --input-size 160 \
   --inference-fps 4
 ```
 
@@ -193,8 +205,8 @@ python sensor-client/thermal_person_detector.py \
 ```bash
 python sensor-client/thermal_person_detector.py \
   --device /dev/video0 \
-  --model models/llvip-yolov5l-320.onnx \
-  --input-size 320 \
+  --model models/llvip-yolov5l-160.onnx \
+  --input-size 160 \
   --display-mode live
 ```
 
@@ -203,8 +215,8 @@ python sensor-client/thermal_person_detector.py \
 ```bash
 python sensor-client/thermal_person_detector.py \
   --device /dev/video0 \
-  --model models/llvip-yolov5l-320.onnx \
-  --input-size 320 \
+  --model models/llvip-yolov5l-160.onnx \
+  --input-size 160 \
   --rotate 90 \
   --backend gstreamer
 ```
@@ -214,14 +226,14 @@ python sensor-client/thermal_person_detector.py \
 ```bash
 python sensor-client/thermal_person_detector.py \
   --device /dev/video0 \
-  --model models/llvip-yolov5l-320.onnx \
-  --input-size 320 \
+  --model models/llvip-yolov5l-160.onnx \
+  --input-size 160 \
   --confidence 0.20
 ```
 
-ONNX 모델의 고정 입력 크기와 `--input-size`는 같아야 합니다. 640 모델을 비교할 때는 `models/llvip-yolov5l-640.onnx`와 `--input-size 640`을 함께 사용합니다.
+ONNX 모델의 고정 입력 크기와 `--input-size`는 같아야 합니다. Release 모델은 160 입력 전용입니다. 직접 변환한 320 또는 640 모델을 비교할 때는 파일명과 `--input-size`를 함께 변경합니다.
 
-Raspberry Pi 5 2GB에서 같은 160x120 프레임을 5회 추론한 1차 측정 평균은 320 입력 약 408ms, 640 입력 약 1782ms였습니다. 320 입력을 우선 사용하되, 실제 설치 거리에서 작은 사람의 미탐이 늘어나는지 별도로 확인합니다.
+Raspberry Pi 5 2GB에서 같은 160x120 프레임을 5회 추론한 1차 측정 평균은 320 입력 약 408ms, 640 입력 약 1782ms였습니다. 현재 Release는 CPU 부하를 줄이기 위해 160 입력 모델을 제공하며, 실제 설치 거리에서 작은 사람의 미탐이 늘어나는지 별도로 확인합니다.
 
 `Q`, `Esc` 또는 창 닫기 버튼으로 종료합니다.
 
