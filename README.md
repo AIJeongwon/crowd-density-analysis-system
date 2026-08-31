@@ -90,6 +90,18 @@ python3 sensor-client/sensor_client.py --debug --verbose
 curl http://127.0.0.1:8000/api/locations/moran-market-gate-1/status
 ```
 
+지도 웹:
+
+    cp frontend/.env.example frontend/.env.local
+    cd frontend
+    npm install
+    npm run dev
+
+frontend/.env.local의 NEXT_PUBLIC_KAKAO_MAP_APP_KEY에 카카오 Developers
+JavaScript 키를 넣고 허용 도메인에 로컬 및 운영 도메인을 등록한다.
+웹은 GET /api/locations/statuses를 기본 5초마다 조회하며,
+NEXT_PUBLIC_STATUS_POLL_INTERVAL_MS로 주기를 바꿀 수 있다.
+
 ## 데이터 규칙
 
 - 원시 열화상과 LiDAR 데이터는 서버로 전송하지 않고 엣지에서 처리한다.

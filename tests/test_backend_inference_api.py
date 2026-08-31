@@ -56,7 +56,13 @@ class ServerEnvironmentTest(unittest.TestCase):
         return {
             "backend": {"host": "0.0.0.0", "port": 8123},
             "locations": {
-                "gate-1": {"area_m2": 40.0, "capacity": 20},
+                "gate-1": {
+                    "display_name": "1번 출입구",
+                    "latitude": 37.4293,
+                    "longitude": 127.1266,
+                    "area_m2": 40.0,
+                    "capacity": 20,
+                },
             },
         }
 
@@ -79,6 +85,18 @@ class ServerEnvironmentTest(unittest.TestCase):
         self.assertEqual(environment.port, 8123)
         self.assertEqual(environment.location_configs["gate-1"].area_m2, 40.0)
         self.assertEqual(environment.location_configs["gate-1"].capacity, 20)
+        self.assertEqual(
+            environment.location_configs["gate-1"].display_name,
+            "1번 출입구",
+        )
+        self.assertEqual(
+            environment.location_configs["gate-1"].latitude,
+            37.4293,
+        )
+        self.assertEqual(
+            environment.location_configs["gate-1"].longitude,
+            127.1266,
+        )
 
     def test_reports_file_and_json_errors(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -117,6 +135,33 @@ class ServerEnvironmentTest(unittest.TestCase):
                     "locations": {"gate-1": {"area_m2": 40, "capacity": 0}},
                 },
                 "capacity",
+            ),
+            (
+                {
+                    "backend": {"host": "0.0.0.0", "port": 8000},
+                    "locations": {
+                        "gate-1": {
+                            "area_m2": 40,
+                            "capacity": 20,
+                            "latitude": 37.4,
+                        }
+                    },
+                },
+                "provided together",
+            ),
+            (
+                {
+                    "backend": {"host": "0.0.0.0", "port": 8000},
+                    "locations": {
+                        "gate-1": {
+                            "area_m2": 40,
+                            "capacity": 20,
+                            "latitude": 91,
+                            "longitude": 127.1,
+                        }
+                    },
+                },
+                "latitude",
             ),
         )
 
@@ -276,8 +321,20 @@ class InferenceApiTest(unittest.TestCase):
             0,
             store=self.store,
             location_configs={
-                "gate-1": {"area_m2": 40.0, "capacity": 20},
-                "gate-2": {"area_m2": 20.0, "capacity": 10},
+                "gate-1": {
+                    "display_name": "1번 출입구",
+                    "latitude": 37.4293,
+                    "longitude": 127.1266,
+                    "area_m2": 40.0,
+                    "capacity": 20,
+                },
+                "gate-2": {
+                    "display_name": "2번 출입구",
+                    "latitude": 37.4301,
+                    "longitude": 127.128,
+                    "area_m2": 20.0,
+                    "capacity": 10,
+                },
             },
         )
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -385,6 +442,33 @@ class InferenceApiTest(unittest.TestCase):
         self.assertEqual(body["occupancy_ratio"], 0.4)
         self.assertEqual(body["congestion_score"], 40.0)
         self.assertEqual(body["congestion_level"], "MEDIUM")
+        self.assertEqual(body["display_name"], "1번 출입구")
+        self.assertEqual(body["latitude"], 37.4293)
+        self.assertEqual(body["longitude"], 127.1266)
+
+    def test_all_location_statuses_include_map_metadata_and_no_data(self) -> None:
+        self.post_result(location_id="gate-1", people_count=8)
+
+        status, body = self.request(
+            "/api/locations/statuses?window_seconds=9999"
+        )
+
+        self.assertEqual(status, 200)
+        self.assertIn("generated_at", body)
+        self.assertEqual(body["window_seconds"], 3600)
+        self.assertEqual(len(body["locations"]), 2)
+
+        first, second = body["locations"]
+        self.assertEqual(first["location_id"], "gate-1")
+        self.assertEqual(first["status"], "OK")
+        self.assertEqual(first["display_name"], "1번 출입구")
+        self.assertEqual(first["latitude"], 37.4293)
+        self.assertEqual(first["people_count"], 8)
+
+        self.assertEqual(second["location_id"], "gate-2")
+        self.assertEqual(second["status"], "NO_DATA")
+        self.assertEqual(second["display_name"], "2번 출입구")
+        self.assertIsNone(second["people_count"])
 
     def test_rejects_invalid_inference_result(self) -> None:
         status, body = self.request(

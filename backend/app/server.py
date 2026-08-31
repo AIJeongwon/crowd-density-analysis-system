@@ -4,7 +4,7 @@ import argparse
 import json
 import threading
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Mapping
@@ -106,6 +106,41 @@ class RequestHandler(BaseHTTPRequestHandler):
                 limit=max(1, min(limit, 100)),
             )
             self._send_json(200, {"results": [result.to_dict() for result in results]})
+            return
+
+        if path_parts == ["api", "locations", "statuses"]:
+            window_seconds = max(
+                1,
+                min(
+                    _parse_int(
+                        query.get("window_seconds", ["30"])[0],
+                        default=30,
+                    ),
+                    3600,
+                ),
+            )
+            generated_at = datetime.now(timezone.utc)
+            results = self._result_store().all()
+            locations = [
+                build_location_status(
+                    location_id,
+                    results,
+                    location_config,
+                    window_seconds=window_seconds,
+                    now=generated_at,
+                )
+                for location_id, location_config in sorted(
+                    self._location_configs().items()
+                )
+            ]
+            self._send_json(
+                200,
+                {
+                    "generated_at": generated_at.isoformat(),
+                    "window_seconds": window_seconds,
+                    "locations": locations,
+                },
+            )
             return
 
         if (

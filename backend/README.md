@@ -16,7 +16,13 @@ cp environment.example.json backend/app/environment.json
 {
   "backend": {"host": "0.0.0.0", "port": 8000},
   "locations": {
-    "moran-market-gate-1": {"area_m2": 100.0, "capacity": 50}
+    "moran-market-gate-1": {
+      "display_name": "모란민속5일장",
+      "latitude": 37.429325616,
+      "longitude": 127.126600316,
+      "area_m2": 100.0,
+      "capacity": 50
+    }
   }
 }
 ```
@@ -39,6 +45,8 @@ debug 로그에는 클라이언트 주소, HTTP 요청과 응답 상태, 수신 
 
 ## 엔드포인트
 
+- GET /api/locations/statuses: 지도용 전체 위치 상태
+
 - `GET /health`
 - `POST /api/inference-results`
 - `GET /api/inference-results/recent`
@@ -56,10 +64,15 @@ curl -X POST http://127.0.0.1:8000/api/inference-results \
 
 ```bash
 curl http://127.0.0.1:8000/api/locations/moran-market-gate-1/status
+curl http://127.0.0.1:8000/api/locations/statuses
 curl 'http://127.0.0.1:8000/api/inference-results/recent?limit=5&location_id=moran-market-gate-1'
 ```
 
 최근 결과는 `limit`, `location_id`, `node_id`로 필터링한다.
+
+전체 위치 상태는 설정된 위치를 locations 배열로 반환한다.
+데이터가 아직 없는 위치도 NO_DATA 상태로 배열에 포함한다.
+지도 좌표는 WGS84 기준 latitude와 longitude를 함께 설정한다.
 
 ## 혼잡도
 

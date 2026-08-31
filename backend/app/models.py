@@ -73,6 +73,9 @@ class LocationConfig:
     location_id: str
     area_m2: float
     capacity: int
+    display_name: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
 
     @classmethod
     def from_mapping(
@@ -108,10 +111,51 @@ class LocationConfig:
                 f"locations.{normalized_id}.capacity must be a positive integer"
             )
 
+        display_name = payload.get("display_name")
+        if display_name is not None:
+            if not isinstance(display_name, str) or not display_name.strip():
+                raise ValidationError(
+                    f"locations.{normalized_id}.display_name "
+                    "must be a non-empty string"
+                )
+            display_name = display_name.strip()
+
+        latitude = payload.get("latitude")
+        longitude = payload.get("longitude")
+        if (latitude is None) != (longitude is None):
+            raise ValidationError(
+                f"locations.{normalized_id}.latitude and longitude "
+                "must be provided together"
+            )
+        if latitude is not None:
+            if (
+                isinstance(latitude, bool)
+                or not isinstance(latitude, (int, float))
+                or not math.isfinite(latitude)
+                or not -90 <= latitude <= 90
+            ):
+                raise ValidationError(
+                    f"locations.{normalized_id}.latitude "
+                    "must be a number between -90 and 90"
+                )
+            if (
+                isinstance(longitude, bool)
+                or not isinstance(longitude, (int, float))
+                or not math.isfinite(longitude)
+                or not -180 <= longitude <= 180
+            ):
+                raise ValidationError(
+                    f"locations.{normalized_id}.longitude "
+                    "must be a number between -180 and 180"
+                )
+
         return cls(
             location_id=normalized_id,
             area_m2=float(area_m2),
             capacity=capacity,
+            display_name=display_name,
+            latitude=None if latitude is None else float(latitude),
+            longitude=None if longitude is None else float(longitude),
         )
 
 

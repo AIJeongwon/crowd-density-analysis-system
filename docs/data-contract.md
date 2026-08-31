@@ -59,6 +59,9 @@ class ModelAdapter:
 {
   "locations": {
     "moran-market-gate-1": {
+      "display_name": "모란민속5일장",
+      "latitude": 37.429325616,
+      "longitude": 127.126600316,
       "area_m2": 100.0,
       "capacity": 50
     }
@@ -85,8 +88,13 @@ congestion_score = min(occupancy_ratio × 100, 100)
 ```json
 {
   "location_id": "moran-market-gate-1",
+  "display_name": "모란민속5일장",
+  "latitude": 37.429325616,
+  "longitude": 127.126600316,
   "status": "OK",
   "node_id": "raspberry-pi-001",
+  "measured_at": "2026-08-10T09:00:00+00:00",
+  "received_at": "2026-08-10T09:00:01+00:00",
   "people_count": 12,
   "area_m2": 100.0,
   "capacity": 50,
@@ -94,9 +102,34 @@ congestion_score = min(occupancy_ratio × 100, 100)
   "occupancy_ratio": 0.24,
   "congestion_score": 24.0,
   "congestion_level": "LOW",
-  "confidence": 0.91
+  "confidence": 0.91,
+  "window_seconds": 30
 }
 ```
+
+## 지도용 전체 위치 상태
+
+지도 웹은 GET /api/locations/statuses?window_seconds=30을 사용한다.
+응답은 요청 시각과 모든 설정 위치의 상태를 한 번에 반환한다.
+좌표는 WGS84 십진수이며 위도와 경도를 반드시 함께 설정한다.
+아직 수신값이 없는 설정 위치도 NO_DATA 상태로 locations 배열에 포함한다.
+
+    {
+      "generated_at": "2026-08-10T09:00:01+00:00",
+      "window_seconds": 30,
+      "locations": [
+        {
+          "location_id": "moran-market-gate-1",
+          "display_name": "모란민속5일장",
+          "latitude": 37.429325616,
+          "longitude": 127.126600316,
+          "status": "OK",
+          "people_count": 12,
+          "congestion_score": 24.0,
+          "congestion_level": "LOW"
+        }
+      ]
+    }
 
 ## 기타 API
 

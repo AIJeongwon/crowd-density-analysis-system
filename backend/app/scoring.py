@@ -45,6 +45,9 @@ def build_location_status(
         status.update(
             area_m2=location_config.area_m2,
             capacity=location_config.capacity,
+            display_name=location_config.display_name or location_id,
+            latitude=location_config.latitude,
+            longitude=location_config.longitude,
         )
         return status
 
@@ -59,6 +62,9 @@ def build_location_status(
         "measured_at": latest.timestamp.isoformat(),
         "received_at": latest.received_at.isoformat(),
         "people_count": latest.people_count,
+        "display_name": location_config.display_name or location_id,
+        "latitude": location_config.latitude,
+        "longitude": location_config.longitude,
         "area_m2": location_config.area_m2,
         "capacity": location_config.capacity,
         "density_per_m2": round(density_per_m2, 4),
@@ -91,6 +97,9 @@ def _empty_status(
         "measured_at": None,
         "received_at": None,
         "people_count": None,
+        "display_name": None,
+        "latitude": None,
+        "longitude": None,
         "area_m2": None,
         "capacity": None,
         "density_per_m2": None,

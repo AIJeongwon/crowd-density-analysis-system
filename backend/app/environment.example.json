@@ -5,6 +5,9 @@
   },
   "locations": {
     "moran-market-gate-1": {
+      "display_name": "모란민속5일장",
+      "latitude": 37.429325616,
+      "longitude": 127.126600316,
       "area_m2": 100.0,
       "capacity": 50
     }
