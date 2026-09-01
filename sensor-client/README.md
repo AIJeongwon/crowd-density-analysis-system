@@ -14,7 +14,7 @@ LidarSensor   ─> lidar queue   ─┘                                 │
                                       single-slot mailbox ─> Communication
 ```
 
-- `ThermalSensor`: PureThermal USB-UVC 보드의 Lepton 3.5 Y16 프레임을 읽는다.
+- `ThermalSensor`: PureThermal USB-UVC 보드의 Lepton 3.5 Y16 프레임을 읽고, 시계 방향으로 90도 회전한 120×160 프레임을 센서 큐에 저장한다.
 - `LidarSensor`: C++ 브리지를 실행하여 C1의 완성된 스캔을 읽는다.
 - `Fusion`: `fusion.poll_interval_seconds`마다 두 센서 큐를 확인한다. 둘 다 있으면 가장 오래된 항목을 FIFO로 하나씩 결합한다. `flush_every_checks`번째 확인에서는 두 큐를 모두 비우고 결합을 건너뛴다. 기본 예시는 10회다.
 - `ModelAdapter`: 결합 데이터를 모델 플러그인에 전달해 `people_count`와 `confidence`를 얻는다.

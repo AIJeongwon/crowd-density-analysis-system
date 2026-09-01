@@ -407,14 +407,17 @@ class AdapterAndMailboxTest(unittest.TestCase):
 
 
 class SensorParsingTest(unittest.TestCase):
-    def test_thermal_capture_reads_little_endian_y16(self) -> None:
+    def test_thermal_capture_reads_y16_and_rotates_clockwise(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             environment = make_environment(Path(temporary_directory))
 
             def runner(command: list[str], **_: object) -> subprocess.CompletedProcess[bytes]:
                 output = next(value for value in command if value.startswith("--stream-to="))
                 Path(output.split("=", 1)[1]).write_bytes(
-                    (30000).to_bytes(2, "little") * (160 * 120)
+                    b"".join(
+                        value.to_bytes(2, "little")
+                        for value in range(160 * 120)
+                    )
                 )
                 return subprocess.CompletedProcess(command, 0, b"", b"")
 
@@ -429,7 +432,14 @@ class SensorParsingTest(unittest.TestCase):
             )
             frame = worker.capture_once()
             self.assertEqual(len(frame.pixels), 160 * 120)
-            self.assertEqual(frame.pixels[0], 30000)
+            self.assertEqual((frame.width, frame.height), (120, 160))
+            self.assertEqual(frame.pixels[0], 119 * 160)
+            self.assertEqual(frame.pixels[frame.width - 1], 0)
+            self.assertEqual(
+                frame.pixels[(frame.height - 1) * frame.width],
+                (120 * 160) - 1,
+            )
+            self.assertEqual(frame.pixels[-1], 159)
 
     def test_lidar_bridge_record_is_parsed_into_scan(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

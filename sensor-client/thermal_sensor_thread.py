@@ -123,4 +123,29 @@ class ThermalSensorWorker(ManagedWorker):
             pixels.byteswap()
         if len(pixels) != THERMAL_PIXEL_COUNT:
             raise SensorError("Y16 frame contains an invalid pixel count")
-        return ThermalFrame(captured_at=captured_at, pixels=tuple(pixels))
+        rotated_pixels = _rotate_pixels_clockwise(
+            pixels,
+            width=THERMAL_WIDTH,
+            height=THERMAL_HEIGHT,
+        )
+        return ThermalFrame(
+            captured_at=captured_at,
+            pixels=rotated_pixels,
+            width=THERMAL_HEIGHT,
+            height=THERMAL_WIDTH,
+        )
+
+
+def _rotate_pixels_clockwise(
+    pixels: array[int],
+    *,
+    width: int,
+    height: int,
+) -> tuple[int, ...]:
+    """Rotate a row-major scalar image clockwise by 90 degrees."""
+
+    return tuple(
+        pixels[row * width + column]
+        for column in range(width)
+        for row in range(height - 1, -1, -1)
+    )
