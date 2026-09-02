@@ -41,10 +41,10 @@ Raspberry Pi 프로세스는 Main과 5개 작업 스레드로 구성된다.
 - PureThermal USB-UVC 기반 Lepton 3.5 수집
 - 공식 SLAMTEC SDK 기반 RPLIDAR C1 C++ 브리지
 - 두 센서 FIFO 중합과 주기적 오래된 큐 정리
-- 프레임워크 독립 Python 모델 어댑터
+- LLVIP YOLOv5l ONNX 기준 모델과 프레임워크 독립 Python 모델 어댑터
 - 손실 없는 단일 슬롯 결과 전달
 - HTTP/1.1 연결 재사용, 끊김 시 1회 재연결, 지연 warning과 연속 실패 처리
-- 디버그용 컬러 열화상 및 흑백 LiDAR 이미지
+- 디버그용 컬러 열화상, 흑백 LiDAR 및 사람 bounding-box 추론 이미지
 - 위치별 밀도, 점유율과 혼잡도 API
 
 * 수집된 센서 데이터 기반 혼잡도 추정
@@ -57,7 +57,7 @@ Raspberry Pi 프로세스는 Main과 5개 작업 스레드로 구성된다.
 클라이언트와 서버 설정 파일을 각각 생성한다.
 
 ```bash
-cp environment.example.json sensor-client/environment.json
+cp sensor-client/environment.example.json sensor-client/environment.json
 cp environment.example.json backend/app/environment.json
 ```
 
@@ -68,6 +68,18 @@ git clone https://github.com/Slamtec/rplidar_sdk.git
 make
 ```
 
+LLVIP 추론을 사용할 Raspberry Pi에서는 프로젝트 루트에 가상 환경을 준비한다. OpenCV와 NumPy는 운영체제 패키지를 사용하고 ONNX Runtime만 가상 환경에 설치한다.
+
+```bash
+sudo apt update
+sudo apt install -y python3-venv python3-numpy python3-opencv
+python3 -m venv --system-site-packages .venv
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install onnxruntime
+```
+
+모델 다운로드와 SHA-256 확인 방법은 [센서 클라이언트 문서](sensor-client/README.md#llvip-onnx-어댑터)를 참고한다.
+
 서버:
 
 ```bash
@@ -77,11 +89,22 @@ python3 -m backend.app.server --debug
 
 서버는 실행 위치와 관계없이 `backend/app/environment.json`을 읽는다. `--debug/-d`를 사용하면 HTTP 접근 정보와 검증된 수신 JSON payload를 `DEBUG` 로그로 출력한다.
 
-Raspberry Pi 클라이언트:
+Raspberry Pi 클라이언트는 가상 환경을 활성화해서 실행하거나 인터프리터 경로를 직접 지정할 수 있다.
+
+가상 환경 활성화 방식:
 
 ```bash
-python3 sensor-client/sensor_client.py
-python3 sensor-client/sensor_client.py --debug --verbose
+source .venv/bin/activate
+python sensor-client/sensor_client.py
+python sensor-client/sensor_client.py --debug --verbose
+deactivate
+```
+
+직접 실행 방식:
+
+```bash
+.venv/bin/python sensor-client/sensor_client.py
+.venv/bin/python sensor-client/sensor_client.py --debug --verbose
 ```
 
 클라이언트 옵션은 `--debug`, `--verbose`, `--help`뿐이다. IP, 장치, 주기와 모델 경로는 `sensor-client/environment.json`에서 읽는다. `--debug`에서 adapter module 경로가 없거나 파일을 찾지 못하면 0~50의 임의 인원 수와 신뢰도 0.0을 서버로 전송한다.

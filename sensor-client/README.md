@@ -26,15 +26,37 @@ LidarSensor   ─> lidar queue   ─┘                                 │
 
 필요한 환경:
 
-- Raspberry Pi의 32비트 또는 64비트 Linux와 Python 3.9 이상
+- Python 3.9 이상을 제공하는 Raspberry Pi Linux. LLVIP ONNX 추론은 `aarch64` 64비트 Raspberry Pi OS를 기준으로 한다.
 - FLIR Lepton 3.5와 PureThermal 호환 USB-UVC 보드
 - SLAMTEC RPLIDAR C1
 - `v4l2-ctl`, C++ 빌드 도구, C1 지원 RPLIDAR SDK 2.1.0 이상
 
 ```bash
 sudo apt update
-sudo apt install -y v4l-utils build-essential
+sudo apt install -y \
+  v4l-utils build-essential curl \
+  python3-venv python3-numpy python3-opencv
 ```
+
+### Python 가상 환경
+
+Raspberry Pi OS Bookworm에서는 ONNX Runtime을 시스템 Python에 직접 설치하지 않고 프로젝트 가상 환경에 설치한다. OpenCV와 NumPy는 위의 운영체제 패키지를 재사용하도록 `--system-site-packages`를 지정한다.
+
+```bash
+uname -m
+python3 --version
+python3 -m venv --system-site-packages .venv
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install onnxruntime
+```
+
+LLVIP 모델을 사용하려면 `uname -m` 결과가 `aarch64`인지 확인한다. 설치 후 다음 명령이 버전을 모두 출력해야 한다.
+
+```bash
+.venv/bin/python -c "import cv2, numpy, onnxruntime; print(cv2.__version__, numpy.__version__, onnxruntime.__version__)"
+```
+
+`sudo pip install`이나 `--break-system-packages`는 사용하지 않는다. 모델을 사용하지 않는 디버그 임의값 모드만 실행한다면 ONNX Runtime은 필요하지 않다.
 
 ### Lepton 3.5
 
@@ -62,13 +84,13 @@ make
 프로젝트 루트에서 예시를 클라이언트 디렉터리로 복사한다.
 
 ```bash
-cp environment.example.json sensor-client/environment.json
+cp sensor-client/environment.example.json sensor-client/environment.json
 ```
 
 PowerShell:
 
 ```powershell
-Copy-Item environment.example.json sensor-client/environment.json
+Copy-Item sensor-client/environment.example.json sensor-client/environment.json
 ```
 
 | 항목                                       | 설명                                                  |
@@ -99,26 +121,67 @@ class ModelAdapter:
         return {"people_count": 12, "confidence": 0.91}
 ```
 
-입력은 `fused_at`, `thermal: {captured_at, width, height, pixels}`, `lidar: {captured_at, sequence, points}` 구조다. 각 LiDAR point는 `(angle_deg, distance_mm, quality_raw)`다. 출력은 0 이상의 정수 `people_count`와 0~1 숫자 `confidence`여야 한다.
+입력은 `fused_at`, `thermal: {captured_at, width, height, pixels}`, `lidar: {captured_at, sequence, points}`, `debug: {enabled, output_dir}` 구조다. 각 LiDAR point는 `(angle_deg, distance_mm, quality_raw)`다. 출력은 0 이상의 정수 `people_count`와 0~1 숫자 `confidence`여야 한다.
+
+### LLVIP ONNX 어댑터
+
+`llvip_model_adapter.py`는 LLVIP 적외선 영상으로 학습된 YOLOv5l ONNX 모델을 CPU에서 실행한다. 현재 기준선 구현은 중합 데이터 중 열화상만 이용해 사람을 검출하고, NMS 이후 검출 수를 `people_count`, 검출 신뢰도의 평균을 `confidence`로 반환한다. LiDAR 결합 추론은 후속 모델에서 추가할 수 있다.
+
+Release 모델은 저장소에 커밋하지 않고 프로젝트 루트의 `models/`에 내려받는다.
+
+```bash
+mkdir -p models
+curl -L \
+  https://github.com/AIJeongwon/crowd-density-analysis-system/releases/download/llvip-yolov5l-160-v1/llvip-yolov5l-160.onnx \
+  -o models/llvip-yolov5l-160.onnx
+echo "f553ac510ee4cfe50adc618c86403c4f8a0dfb07e7032b709c44369473285d2a  models/llvip-yolov5l-160.onnx" | sha256sum --check
+```
+
+`sensor-client/environment.json`의 모델 설정은 다음과 같이 지정한다. 상대 경로는 해당 JSON 파일의 위치를 기준으로 한다.
+
+```json
+"model": {
+  "adapter_module": "llvip_model_adapter.py",
+  "model_path": "../models/llvip-yolov5l-160.onnx"
+}
+```
+
+열화상 프레임은 `ThermalSensorWorker.capture_once()`에서 이미 시계 방향 90도로 회전된다. `llvip_model_adapter.py`의 `thermal_frame_to_image()`는 게시된 120×160 방향을 그대로 사용하므로 모델 입력에서 다시 회전하지 않는다.
+
+`--debug`에서는 `ModelAdapter.infer()`가 NMS 이후 bounding box를 원본 열화상 좌표로 복원하고 컬러 열화상 위에 사람 영역과 신뢰도를 표시하여 `fusion.debug_dir`에 `*_inference.png`로 저장한다. 사람이 검출되지 않은 프레임도 비교할 수 있도록 박스 없는 추론 이미지로 저장한다.
+
+공개 LLVIP 모델은 검출 가능성을 확인하기 위한 기준선이다. Lepton 3.5의 160×120 영상은 LLVIP 학습 영상보다 정보량이 적으므로 실제 설치 거리·각도·가림 조건에서 오탐과 미탐을 별도로 측정해야 한다. LLVIP 데이터와 공개 가중치의 사용 조건도 배포 전에 확인한다.
 
 adapter module 경로가 없거나 파일을 찾지 못하면 일반 모드는 오류로 종료한다. `--debug`에서는 0~50의 임의 인원 수와 신뢰도 0.0을 생성해 통신 스레드로 전달한다. `--verbose`를 함께 사용하면 생성한 값이 서버 전송용으로 큐잉되었음을 ModelAdapter 로그로 출력한다. adapter module은 있지만 모델 파일만 없는 경우에는 기존처럼 추론과 전송을 생략한다.
 
 ## 실행
 
-프로젝트 루트에서 실행해도 클라이언트는 `sensor-client/environment.json`을 읽는다.
+프로젝트 루트에서 실행해도 클라이언트는 `sensor-client/environment.json`을 읽는다. 다음 두 방법 중 하나를 사용한다.
+
+가상 환경을 활성화해서 실행:
 
 ```bash
-python3 sensor-client/sensor_client.py [--debug] [--verbose]
+source .venv/bin/activate
+python sensor-client/sensor_client.py [--debug] [--verbose]
+deactivate
 ```
+
+가상 환경을 활성화하지 않고 인터프리터를 직접 지정해서 실행:
+
+```bash
+.venv/bin/python sensor-client/sensor_client.py [--debug] [--verbose]
+```
+
+systemd에서는 셸 활성화 명령을 사용하지 않고 서비스 파일 전역 `[Service]`의 `ExecStart`에 프로젝트의 절대 경로인 `/absolute/path/to/cdas/.venv/bin/python`과 `sensor-client/sensor_client.py`를 지정한다.
 
 받는 옵션은 `--debug`, `--verbose`, 자동 제공되는 `--help`뿐이다.
 
-- `--debug`: Fusion이 결합 데이터를 큐에 넣기 전에 컬러 열화상과 검은 배경·흰 점의 LiDAR PNG를 `fusion.debug_dir`에 저장한다.
+- `--debug`: Fusion이 컬러 열화상과 검은 배경·흰 점의 LiDAR PNG를 저장하고, LLVIP 추론 후에는 사람 bounding box와 신뢰도가 표시된 `*_inference.png`도 `fusion.debug_dir`에 저장한다.
 - `--verbose`: 정상 센서 수집, Fusion 큐잉, 모델 추론, 정상 heartbeat 로그를 추가한다.
 - 기본 로그: `yy-mm-dd hh:mm:ss.ms`, 스레드 이름, 레벨, Main과 통신의 시작·종료, warning/error.
 
 ```bash
-python3 sensor-client/sensor_client.py --debug --verbose
+.venv/bin/python sensor-client/sensor_client.py --debug --verbose
 ```
 
 통신은 `GET /health`와 `POST /api/inference-results`에 연결 하나를 재사용한다. 연결 오류가 나면 기존 연결을 닫고 새 연결로 한 번 즉시 재시도하며, 두 시도가 모두 실패한 논리 요청만 연속 실패 1회로 계산한다. 느린 요청과 통신 실패는 warning이며 연속 실패 한도에 도달하면 error로 전체를 종료한다. 원시 센서용 `/api/sensor-readings`와 서버 `--logging`은 제거되었다.

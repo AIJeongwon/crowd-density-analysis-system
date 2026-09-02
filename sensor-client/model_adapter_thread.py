@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import queue
 import random
+import sys
 import threading
 from datetime import timezone
 from pathlib import Path
@@ -76,7 +77,13 @@ class ModelAdapterWorker(ManagedWorker):
                 )
             else:
                 self.verbose_info("running crowd inference model")
-                output = adapter.infer(to_model_input(fused))
+                output = adapter.infer(
+                    to_model_input(
+                        fused,
+                        debug=self.debug,
+                        debug_dir=self.environment.fusion.debug_dir,
+                    )
+                )
                 result = parse_inference_output(output, fused, self.environment)
             if not self.mailbox.publish(result, self.stop_event):
                 return
@@ -135,7 +142,13 @@ def load_model_adapter(adapter_path: Path, model_path: Path) -> InferenceAdapter
     if spec is None or spec.loader is None:
         raise ModelError(f"failed to load model adapter module: {adapter_path}")
     module = importlib.util.module_from_spec(spec)
-    execute_module(spec.loader, module)
+    sys.modules[spec.name] = module
+    try:
+        execute_module(spec.loader, module)
+    except Exception:
+        if sys.modules.get(spec.name) is module:
+            del sys.modules[spec.name]
+        raise
     adapter_class = getattr(module, "ModelAdapter", None)
     if adapter_class is None or not callable(adapter_class):
         raise ModelError("model adapter module must define ModelAdapter")
@@ -155,7 +168,12 @@ def execute_module(loader: Any, module: ModuleType) -> None:
         raise ModelError(f"failed to import model adapter: {exc}") from exc
 
 
-def to_model_input(fused: FusedSensorData) -> dict[str, Any]:
+def to_model_input(
+    fused: FusedSensorData,
+    *,
+    debug: bool = False,
+    debug_dir: Path | None = None,
+) -> dict[str, Any]:
     return {
         "fused_at": fused.fused_at.isoformat(),
         "thermal": {
@@ -168,6 +186,10 @@ def to_model_input(fused: FusedSensorData) -> dict[str, Any]:
             "captured_at": fused.lidar.captured_at.isoformat(),
             "sequence": fused.lidar.sequence,
             "points": fused.lidar.points,
+        },
+        "debug": {
+            "enabled": debug,
+            "output_dir": str(debug_dir) if debug_dir is not None else None,
         },
     }
 
