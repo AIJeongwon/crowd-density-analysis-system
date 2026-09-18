@@ -190,14 +190,14 @@ python sensor-client/thermal_person_detector.py \
   --input-size 160
 ```
 
-기본 `synchronized` 표시 모드는 검출에 사용한 프레임과 박스를 함께 표시합니다. 추론은 CPU 부하를 줄이기 위해 기본 초당 4회로 제한하며, 상단 `FPS`도 실제 추론 주기를 표시합니다. 다른 주기를 시험할 때는 `--inference-fps`를 지정합니다.
+기본 `synchronized` 표시 모드는 검출에 사용한 프레임과 박스를 함께 표시합니다. 추론은 CPU 부하를 줄이기 위해 기본 초당 3회로 제한하며, 상단 `FPS`도 실제 추론 주기를 표시합니다. 다른 주기를 시험할 때는 `--inference-fps`를 지정합니다.
 
 ```bash
 python sensor-client/thermal_person_detector.py \
   --device /dev/video0 \
   --model models/llvip-yolov5l-160.onnx \
   --input-size 160 \
-  --inference-fps 4
+  --inference-fps 3
 ```
 
 박스가 약간 늦게 따라와도 카메라 영상을 계속 보고 싶을 때만 `--display-mode live`를 사용합니다.
@@ -238,6 +238,10 @@ Raspberry Pi 5 2GB에서 같은 160x120 프레임을 5회 추론한 1차 측정 
 `Q`, `Esc` 또는 창 닫기 버튼으로 종료합니다.
 
 Lepton 3.5의 원본 해상도와 현재 연결에서 확인된 영상은 모두 160x120입니다. 공개 모델의 정확도 평가는 먼저 검출 가능성을 확인하는 수준으로 해석하고, 실제 설치 거리와 각도에서 별도 촬영 데이터를 모은 뒤 오탐과 미탐을 다시 측정합니다.
+
+LSI-FIR 자료를 이용한 추가 학습, 기존 모델과의 비교, 후보 ONNX 실행 절차는 [LSI 열화상 추가 학습](../docs/model-training.md)에 정리합니다. 후보 모델은 기존 모델과 별도 파일로 관리하며 실제 장비 검증 후 교체합니다.
+
+[입력 크기 비교](../docs/input-size-comparison.md)와 [160 입력 모델 개선 실험](../docs/model-refinement.md)에는 성능 수치, 추론 시간과 남은 한계를 기록합니다. 모델 파일과 학습 데이터는 저장소에 포함하지 않으므로 `git pull`만으로 개선 후보가 적용되지는 않습니다.
 
 ## 가상 센서 클라이언트
 

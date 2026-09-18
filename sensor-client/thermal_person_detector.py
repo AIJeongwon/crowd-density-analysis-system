@@ -71,7 +71,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=0,
     )
     parser.add_argument("--input-size", type=int, default=640)
-    parser.add_argument("--inference-fps", type=float, default=4.0)
+    parser.add_argument("--inference-fps", type=float, default=3.0)
     parser.add_argument("--confidence", type=float, default=0.25)
     parser.add_argument("--nms-threshold", type=float, default=0.45)
     parser.add_argument(

@@ -38,7 +38,7 @@ class ThermalPersonDetectorTest(unittest.TestCase):
             ["--model", "model.onnx"]
         )
 
-        self.assertEqual(args.inference_fps, 4.0)
+        self.assertEqual(args.inference_fps, 3.0)
 
     def test_rejects_excessive_inference_fps(self) -> None:
         with self.assertRaises(ValueError):
