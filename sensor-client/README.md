@@ -16,7 +16,8 @@ LidarSensor   ─> lidar queue   ─┘                                 │
 
 - `ThermalSensor`: PureThermal USB-UVC 보드의 Lepton 3.5 Y16 프레임을 읽고, 시계 방향으로 90도 회전한 120×160 프레임을 센서 큐에 저장한다.
 - `LidarSensor`: C++ 브리지를 실행하여 C1의 완성된 스캔을 읽는다.
-- `Fusion`: `fusion.poll_interval_seconds`마다 두 센서 큐를 확인한다. 둘 다 있으면 가장 오래된 항목을 FIFO로 하나씩 결합한다. `flush_every_checks`번째 확인에서는 두 큐를 모두 비우고 결합을 건너뛴다. 기본 예시는 10회다.
+- `Fusion`: 기본 사진 모드에서는 `fusion.poll_interval_seconds`마다 두 센서 큐의 FIFO 항목을 하나씩 결합하며, `flush_every_checks`번째 확인에 오래된 큐를 비운다.
+  영상 모드에서는 `model.video_inference_fps` 주기로 최신 열화상 프레임과 최신 LiDAR 스캔만 결합하여 지연 누적을 막는다.
 - `ModelAdapter`: 결합 데이터를 모델 플러그인에 전달해 `people_count`와 `confidence`를 얻는다.
 - `Communication`: 단일 슬롯 mailbox의 결과와 heartbeat를 하나의 HTTP/1.1 연결로 순차 전송한다. 슬롯이 빌 때까지 생산자가 대기하므로 전송 전 결과를 덮어쓰지 않는다.
 
@@ -81,6 +82,16 @@ make
 
 ## 환경 설정
 
+### Workers + D1 연결
+
+Workers 구성에서는 `server.base_url`을 지도 웹과 동일한 HTTPS 주소로 설정합니다.
+센서 프로세스의 `CDAS_SENSOR_API_TOKEN` 환경변수에 Worker의 `SENSOR_API_TOKEN`과
+동일한 값을 지정하면 `CommunicationWorker._send_result_until_complete()`가
+측정값 전송에만 Bearer 인증 헤더를 추가합니다. 토큰은 JSON 설정이나 저장소에 기록하지 마세요.
+토큰을 설정한 상태에서 localhost 외의 평문 HTTP 주소를 사용하면 시작 시 오류를 반환합니다.
+기존 Python 서버를 사용할 때는 토큰 환경변수를 비워 기존 동작을 유지할 수 있습니다.
+자세한 초기화 절차는 [Workers 웹 실행 안내](../frontend/README.md)를 참고하세요.
+
 프로젝트 루트에서 예시를 클라이언트 디렉터리로 복사한다.
 
 ```bash
@@ -103,6 +114,7 @@ Copy-Item sensor-client/environment.example.json sensor-client/environment.json
 | `fusion.*_queue_size`                      | 공유 큐 최대 크기                                     |
 | `fusion.debug_dir`                         | 디버그 이미지 폴더. 예시는 `/tmp/cdas`                |
 | `model.adapter_module`, `model.model_path` | 모델 어댑터와 모델 파일                               |
+| `model.video_inference_fps`                | 영상 모드에서 초당 수행할 추론 횟수. 기본값은 `4.0`   |
 | `server.*`                                 | 백엔드 주소, 요청·heartbeat 시간과 연속 실패 한도     |
 
 상대 경로는 `environment.json` 위치를 기준으로 해석한다. 실제 장치, 서버 IP, ID, 모델 경로로 수정하며 운영 설정은 커밋하지 않는다.
@@ -121,7 +133,7 @@ class ModelAdapter:
         return {"people_count": 12, "confidence": 0.91}
 ```
 
-입력은 `fused_at`, `thermal: {captured_at, width, height, pixels}`, `lidar: {captured_at, sequence, points}`, `debug: {enabled, output_dir}` 구조다. 각 LiDAR point는 `(angle_deg, distance_mm, quality_raw)`다. 출력은 0 이상의 정수 `people_count`와 0~1 숫자 `confidence`여야 한다.
+입력은 `inference_mode`(`image` 또는 `video`), `fused_at`, `thermal: {captured_at, width, height, pixels}`, `lidar: {captured_at, sequence, points}`, `debug: {enabled, output_dir, lidar_image_size, lidar_max_distance_m}` 구조다. 각 LiDAR point는 `(angle_deg, distance_mm, quality_raw)`다. 출력은 0 이상의 정수 `people_count`와 0~1 숫자 `confidence`여야 한다.
 
 ### LLVIP ONNX 어댑터
 
@@ -142,13 +154,16 @@ echo "f553ac510ee4cfe50adc618c86403c4f8a0dfb07e7032b709c44369473285d2a  models/l
 ```json
 "model": {
   "adapter_module": "llvip_model_adapter.py",
-  "model_path": "../models/llvip-yolov5l-160.onnx"
+  "model_path": "../models/llvip-yolov5l-160.onnx",
+  "video_inference_fps": 4.0
 }
 ```
 
 열화상 프레임은 `ThermalSensorWorker.capture_once()`에서 이미 시계 방향 90도로 회전된다. `llvip_model_adapter.py`의 `thermal_frame_to_image()`는 게시된 120×160 방향을 그대로 사용하므로 모델 입력에서 다시 회전하지 않는다.
 
-`--debug`에서는 `ModelAdapter.infer()`가 NMS 이후 bounding box를 원본 열화상 좌표로 복원하고 컬러 열화상 위에 사람 영역과 신뢰도를 표시하여 `fusion.debug_dir`에 `*_inference.png`로 저장한다. 사람이 검출되지 않은 프레임도 비교할 수 있도록 박스 없는 추론 이미지로 저장한다.
+기본 사진 모드의 `--debug`에서는 `ModelAdapter.infer()`가 NMS 이후 bounding box를 원본 열화상 좌표로 복원하고 컬러 열화상 위에 사람 영역과 신뢰도를 표시하여 `fusion.debug_dir`에 `*_inference.png`로 저장한다. 사람이 검출되지 않은 프레임도 박스 없는 추론 이미지로 저장한다.
+
+`--video --debug`에서는 디버그 이미지나 영상 파일을 저장하지 않는다. 대신 하나의 GUI 창에 현재 컬러 열화상·사람 bounding box·신뢰도·인원 수를 왼쪽에, 검은 배경의 최신 LiDAR 점군과 scan sequence를 오른쪽에 계속 갱신한다. LiDAR는 이 화면에 표시되지만 현재 LLVIP 추론 연산에는 사용되지 않는다.
 
 공개 LLVIP 모델은 검출 가능성을 확인하기 위한 기준선이다. Lepton 3.5의 160×120 영상은 LLVIP 학습 영상보다 정보량이 적으므로 실제 설치 거리·각도·가림 조건에서 오탐과 미탐을 별도로 측정해야 한다. LLVIP 데이터와 공개 가중치의 사용 조건도 배포 전에 확인한다.
 
@@ -162,27 +177,31 @@ adapter module 경로가 없거나 파일을 찾지 못하면 일반 모드는 �
 
 ```bash
 source .venv/bin/activate
-python sensor-client/sensor_client.py [--debug] [--verbose]
+python sensor-client/sensor_client.py [--video] [--debug] [--verbose]
 deactivate
 ```
 
 가상 환경을 활성화하지 않고 인터프리터를 직접 지정해서 실행:
 
 ```bash
-.venv/bin/python sensor-client/sensor_client.py [--debug] [--verbose]
+.venv/bin/python sensor-client/sensor_client.py [--video] [--debug] [--verbose]
 ```
 
 systemd에서는 셸 활성화 명령을 사용하지 않고 서비스 파일 전역 `[Service]`의 `ExecStart`에 프로젝트의 절대 경로인 `/absolute/path/to/cdas/.venv/bin/python`과 `sensor-client/sensor_client.py`를 지정한다.
 
-받는 옵션은 `--debug`, `--verbose`, 자동 제공되는 `--help`뿐이다.
+받는 옵션은 `--video/-v`, `--debug`, `--verbose`, 자동 제공되는 `--help`뿐이다.
 
-- `--debug`: Fusion이 컬러 열화상과 검은 배경·흰 점의 LiDAR PNG를 저장하고, LLVIP 추론 후에는 사람 bounding box와 신뢰도가 표시된 `*_inference.png`도 `fusion.debug_dir`에 저장한다.
+- `--video`, `-v`: `v4l2-ctl`의 연속 Y16 스트림으로 최신 프레임을 추론한다. 지정하지 않으면 기존 사진 모드다.
+- `--debug`: 사진 모드에서는 Fusion·LiDAR·추론 PNG를 저장하고, 영상 모드에서는 파일 저장 없이 열화상 추론과 LiDAR 점군을 좌우 GUI로 표시한다.
 - `--verbose`: 정상 센서 수집, Fusion 큐잉, 모델 추론, 정상 heartbeat 로그를 추가한다.
 - 기본 로그: `yy-mm-dd hh:mm:ss.ms`, 스레드 이름, 레벨, Main과 통신의 시작·종료, warning/error.
 
 ```bash
 .venv/bin/python sensor-client/sensor_client.py --debug --verbose
+.venv/bin/python sensor-client/sensor_client.py --video --debug --verbose
 ```
+
+영상 디버그 GUI는 X11 또는 Wayland 화면이 필요하다. 창에서 `q`, `Q`, `Esc`를 누르거나 창을 닫으면 클라이언트 전체가 정상 종료된다. SSH로 실행할 때는 X11 forwarding을 활성화해야 한다.
 
 통신은 `GET /health`와 `POST /api/inference-results`에 연결 하나를 재사용한다. 연결 오류가 나면 기존 연결을 닫고 새 연결로 한 번 즉시 재시도하며, 두 시도가 모두 실패한 논리 요청만 연속 실패 1회로 계산한다. 느린 요청과 통신 실패는 warning이며 연속 실패 한도에 도달하면 error로 전체를 종료한다. 원시 센서용 `/api/sensor-readings`와 서버 `--logging`은 제거되었다.
 

@@ -29,7 +29,7 @@ Raspberry Pi 프로세스는 Main과 5개 작업 스레드로 구성된다.
 
 - ThermalSensor: Lepton 3.5 Y16 프레임
 - LidarSensor: SLAMTEC C1 스캔
-- Fusion: 두 FIFO 큐를 설정 주기로 결합
+- Fusion: 사진 모드는 FIFO로, 영상 모드는 최신 센서값으로 결합
 - ModelAdapter: 플러그인 모델로 인원 수 추론
 - Communication: 추론 결과와 heartbeat를 하나의 HTTP/1.1 연결로 전송
 - Main: 공유 자원, 생성·감시·정상 종료
@@ -40,11 +40,11 @@ Raspberry Pi 프로세스는 Main과 5개 작업 스레드로 구성된다.
 
 - PureThermal USB-UVC 기반 Lepton 3.5 수집
 - 공식 SLAMTEC SDK 기반 RPLIDAR C1 C++ 브리지
-- 두 센서 FIFO 중합과 주기적 오래된 큐 정리
+- 사진·영상 추론 모드와 영상 모드 최신 프레임 중합
 - LLVIP YOLOv5l ONNX 기준 모델과 프레임워크 독립 Python 모델 어댑터
 - 손실 없는 단일 슬롯 결과 전달
 - HTTP/1.1 연결 재사용, 끊김 시 1회 재연결, 지연 warning과 연속 실패 처리
-- 디버그용 컬러 열화상, 흑백 LiDAR 및 사람 bounding-box 추론 이미지
+- 사진 모드 디버그 PNG와 영상 모드 실시간 열화상·추론·LiDAR GUI
 - 위치별 밀도, 점유율과 혼잡도 API
 
 * 수집된 센서 데이터 기반 혼잡도 추정
@@ -97,6 +97,7 @@ Raspberry Pi 클라이언트는 가상 환경을 활성화해서 실행하거나
 source .venv/bin/activate
 python sensor-client/sensor_client.py
 python sensor-client/sensor_client.py --debug --verbose
+python sensor-client/sensor_client.py --video --debug --verbose
 deactivate
 ```
 
@@ -105,9 +106,10 @@ deactivate
 ```bash
 .venv/bin/python sensor-client/sensor_client.py
 .venv/bin/python sensor-client/sensor_client.py --debug --verbose
+.venv/bin/python sensor-client/sensor_client.py --video --debug --verbose
 ```
 
-클라이언트 옵션은 `--debug`, `--verbose`, `--help`뿐이다. IP, 장치, 주기와 모델 경로는 `sensor-client/environment.json`에서 읽는다. `--debug`에서 adapter module 경로가 없거나 파일을 찾지 못하면 0~50의 임의 인원 수와 신뢰도 0.0을 서버로 전송한다.
+클라이언트 옵션은 `--video/-v`, `--debug`, `--verbose`, `--help`다. 기본은 사진 추론이며, `--video --debug`는 파일 저장 대신 열화상 추론 결과와 LiDAR 점군을 하나의 GUI에 좌우로 표시한다. IP, 장치, 주기와 모델 경로는 `sensor-client/environment.json`에서 읽는다.
 
 ```bash
 curl http://127.0.0.1:8000/api/locations/moran-market-gate-1/status
@@ -115,13 +117,23 @@ curl http://127.0.0.1:8000/api/locations/moran-market-gate-1/status
 
 지도 웹:
 
+현재 지도 웹은 **Cloudflare Workers + D1** 구성입니다. 별도 Python 서버 없이
+웹과 API를 함께 실행합니다. 로컬 DB 초기화, 센서 인증 및 추후 배포 준비는
+[Workers 웹 실행 안내](frontend/README.md)를 참고하세요. 아래 환경 파일 복사는
+기존 파일이 없을 때만 수행하여 카카오 키를 보존하세요.
+
     cp frontend/.env.example frontend/.env.local
     cd frontend
     npm install
+    npm run db:migrate
+    npm run db:seed
     npm run dev
 
 frontend/.env.local의 NEXT_PUBLIC_KAKAO_MAP_APP_KEY에 카카오 Developers
 JavaScript 키를 넣고 허용 도메인에 로컬 및 운영 도메인을 등록한다.
+Workers API를 사용할 때는 NEXT_PUBLIC_API_BASE_URL을 비워 둔다.
+센서 전송을 받으려면 frontend/.dev.vars의 SENSOR_API_TOKEN과
+센서 프로세스의 CDAS_SENSOR_API_TOKEN을 동일하게 설정한다.
 웹은 GET /api/locations/statuses를 기본 5초마다 조회하며,
 NEXT_PUBLIC_STATUS_POLL_INTERVAL_MS로 주기를 바꿀 수 있다.
 
@@ -130,7 +142,7 @@ NEXT_PUBLIC_STATUS_POLL_INTERVAL_MS로 주기를 바꿀 수 있다.
 - 원시 열화상과 LiDAR 데이터는 서버로 전송하지 않고 엣지에서 처리한다.
 - payload는 `node_id`, `location_id`, `timestamp`, `people_count`, `confidence`다.
 - 서버는 `area_m2`와 `capacity`로 혼잡도를 계산한다.
-- 디버그 이미지는 엣지의 `/sensor-client/debug`에 저장한다.
+- 사진 모드 디버그 이미지는 `fusion.debug_dir`에 저장하며, 영상 모드 디버그는 GUI에만 표시한다.
 
 ## 문서
 
@@ -174,7 +186,8 @@ NEXT_PUBLIC_STATUS_POLL_INTERVAL_MS로 주기를 바꿀 수 있다.
 
 ### 5. 배포 및 문서화
 
-Docker 기반 실행 환경과 AWS 배포 환경을 구성하고, API 명세와 트러블슈팅 과정을 문서화합니다.
+Cloudflare Workers + D1 실행 환경을 구성하고, API 명세와 트러블슈팅 과정을 문서화합니다.
+실제 배포는 별도 단계로 진행합니다.
 
 ## 기술 스택
 
@@ -182,11 +195,11 @@ Docker 기반 실행 환경과 AWS 배포 환경을 구성하고, API 명세와 
 | --------------- | ----------------------------------------------------- |
 | 하드웨어        | Raspberry Pi, Thermal Camera, LiDAR                   |
 | 센서 클라이언트 | Python                                                |
-| 백엔드          | Python 표준 라이브러리, FastAPI 또는 Spring Boot 검토 |
+| 백엔드          | Cloudflare Workers API, 기존 Python 서버는 로컬 대안 |
 | AI / 데이터     | Python, OpenCV, NumPy, PyTorch                        |
-| 프론트엔드      | React, TypeScript                                     |
-| 데이터 저장     | 메모리 저장소, SQLite 또는 PostgreSQL                 |
-| 인프라          | Docker, AWS                                           |
+| 프론트엔드      | React, TypeScript, Vinext                              |
+| 데이터 저장     | Cloudflare D1 (SQLite)                                 |
+| 인프라          | Cloudflare Workers                                    |
 | 문서화          | Markdown, Swagger/OpenAPI                             |
 
 ## 라이선스
