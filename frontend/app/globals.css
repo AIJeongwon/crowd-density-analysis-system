@@ -143,8 +143,9 @@ button:focus-visible, a:focus-visible {
   pointer-events: auto;
 }
 .connection-pill strong { color: var(--low); font-size: 10px; letter-spacing: .1em; }
-.connection-pill.phase-demo strong { color: #9a6a0c; }
-.connection-pill.phase-stale strong { color: #bd7f14; }
+.connection-pill.phase-demo strong,
+.connection-pill.phase-waiting strong { color: #9a6a0c; }
+.connection-pill.phase-stale strong,
 .connection-pill.phase-error strong { color: var(--high); }
 .connection-pill.phase-loading strong { color: var(--muted); }
 

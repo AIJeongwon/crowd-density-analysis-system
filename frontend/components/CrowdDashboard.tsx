@@ -115,16 +115,25 @@ export default function CrowdDashboard() {
     setMobileOpen(true);
   };
 
+  const isConnectionError = phase === 'stale' || phase === 'error';
+  const isWaiting = phase === 'loading' || phase === 'waiting';
   const phaseLabel =
-    phase === 'live'
-      ? 'LIVE'
-      : phase === 'demo'
-        ? 'DEMO'
-        : phase === 'stale'
-          ? 'DELAY'
-          : phase === 'error'
-            ? 'OFFLINE'
-            : 'CONNECTING';
+    isConnectionError
+      ? 'ERROR'
+      : phase === 'live'
+        ? 'LIVE'
+        : phase === 'demo'
+          ? 'DEMO'
+          : '대기';
+  const phaseDescription = isConnectionError
+    ? '자동 재시도 중'
+    : phase === 'loading'
+      ? '연결 확인 중'
+      : phase === 'waiting'
+        ? '센서 데이터 대기'
+        : phase === 'demo'
+          ? '예시 데이터'
+          : Math.round(REFRESH_INTERVAL_MS / 1000) + '초 자동 갱신';
 
   return (
     <main className="dashboard-shell">
@@ -150,17 +159,15 @@ export default function CrowdDashboard() {
           className={'connection-pill phase-' + phase}
           role="status"
         >
-          {phase === 'error' ? (
+          {isConnectionError ? (
             <WifiOff size={14} />
+          ) : isWaiting ? (
+            <Clock3 size={14} />
           ) : (
             <Wifi size={14} />
           )}
           <strong>{phaseLabel}</strong>
-          <span>
-            {phase === 'demo'
-              ? '예시 데이터'
-              : Math.round(REFRESH_INTERVAL_MS / 1000) + '초 자동 갱신'}
-          </span>
+          <span>{phaseDescription}</span>
         </div>
       </header>
 

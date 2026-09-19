@@ -31,7 +31,7 @@ function loadClientModule(file, dependencies, globals = {}) {
 const snapshot = (count = 1) => ({
   generated_at: '2026-09-19T00:00:00Z',
   window_seconds: 30,
-  locations: [{ location_id: 'gate', people_count: count }],
+  locations: [{ location_id: 'gate', status: 'OK', people_count: count }],
 });
 const response = (body) => ({ ok: true, status: 200, json: async () => body });
 const waitForAbort = (signal) => new Promise((_, reject) => {
@@ -276,5 +276,89 @@ test('API timeout configuration has a safe default and supports overrides', () =
       process: { env: { NEXT_PUBLIC_API_TIMEOUT_MS: value } },
     });
     assert.equal(config.API_REQUEST_TIMEOUT_MS, expected);
+  }
+});
+
+test('sensor data transitions between waiting and live independently of API success', async (t) => {
+  const empty = { ...snapshot(), locations: [] };
+  const waiting = {
+    ...snapshot(),
+    locations: [{ location_id: 'gate', status: 'NO_DATA', people_count: null }],
+  };
+  const partial = {
+    ...snapshot(0),
+    locations: [...snapshot(0).locations, { location_id: 'other', status: 'NO_DATA', people_count: null }],
+  };
+  const sequence = [empty, waiting, partial, waiting, new Error('offline'), snapshot(4)];
+  let calls = 0;
+  const harness = createPollingHarness(() => {
+    const result = sequence[calls++];
+    return result instanceof Error ? Promise.reject(result) : Promise.resolve(response(result));
+  });
+  t.after(() => harness.dispose());
+  await nextTurn();
+  assert.equal(harness.state().phase, 'waiting', 'no configured locations is not LIVE');
+  await harness.advance(5_000);
+  assert.equal(harness.state().phase, 'waiting', 'NO_DATA is not LIVE');
+  await harness.advance(5_000);
+  assert.equal(harness.state().phase, 'live', 'one fresh zero-person reading is LIVE');
+  await harness.advance(5_000);
+  assert.equal(harness.state().phase, 'waiting', 'expired readings return to waiting');
+  await harness.advance(5_000);
+  assert.equal(harness.state().phase, 'stale', 'API failure overrides waiting');
+  assert.equal(harness.state().snapshot, waiting, 'preserve the last server snapshot on failure');
+  await harness.advance(5_000);
+  assert.equal(harness.state().phase, 'live');
+  assert.equal(harness.state().message, null);
+});
+
+test('an initial API error recovers to waiting when the server has no sensor data', async (t) => {
+  let calls = 0;
+  const harness = createPollingHarness(async () => ++calls === 1
+    ? { ok: false, status: 503, json: async () => ({ error: 'service_unavailable' }) }
+    : response({ ...snapshot(), locations: [] }));
+  t.after(() => harness.dispose());
+  await nextTurn();
+  assert.equal(harness.state().phase, 'error');
+  await harness.advance(5_000);
+  assert.equal(harness.state().phase, 'waiting');
+  assert.equal(harness.state().message, null);
+});
+
+test('the status badge renders LIVE, waiting and ERROR with distinct descriptions/icons', () => {
+  let phase = 'loading';
+  let badge;
+  const jsx = (type, props) => {
+    const element = { type, props };
+    if (props?.role === 'status') badge = element;
+    return element;
+  };
+  const { default: Dashboard } = loadClientModule('components/CrowdDashboard.tsx', {
+    react: { useState: () => [null, () => {}], useMemo: (calculate) => calculate() },
+    'react/jsx-runtime': { jsx, jsxs: jsx },
+    'lucide-react': { Clock3: 'clock', Wifi: 'wifi', WifiOff: 'wifi-off' },
+    '@/components/KakaoDensityMap': { default: () => null },
+    '@/hooks/useLocationStatuses': {
+      useLocationStatuses: () => ({
+        snapshot: null, phase, message: null, isRefreshing: false, refresh: () => {},
+      }),
+    },
+    '@/lib/congestion': {},
+    '@/lib/config': { REFRESH_INTERVAL_MS: 5_000 },
+  });
+  for (const [value, label, detail, icon] of [
+    ['loading', '대기', '연결 확인 중', 'clock'],
+    ['waiting', '대기', '센서 데이터 대기', 'clock'],
+    ['live', 'LIVE', '5초 자동 갱신', 'wifi'],
+    ['error', 'ERROR', '자동 재시도 중', 'wifi-off'],
+    ['stale', 'ERROR', '자동 재시도 중', 'wifi-off'],
+    ['demo', 'DEMO', '예시 데이터', 'wifi'],
+  ]) {
+    phase = value;
+    Dashboard();
+    assert.equal(badge.props.className, 'connection-pill phase-' + value);
+    assert.equal(badge.props.children[0].type, icon);
+    assert.equal(badge.props.children.find((child) => child.type === 'strong').props.children, label);
+    assert.equal(badge.props.children.find((child) => child.type === 'span').props.children, detail);
   }
 });

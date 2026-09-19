@@ -11,7 +11,7 @@ import {
 import { getDemoLocationsResponse } from '@/lib/demoData';
 import type { LocationsStatusResponse } from '@/types/api';
 
-export type DataPhase = 'loading' | 'live' | 'demo' | 'stale' | 'error';
+export type DataPhase = 'loading' | 'live' | 'waiting' | 'demo' | 'stale' | 'error';
 
 export interface LocationStatusesState {
   snapshot: LocationsStatusResponse | null;
@@ -28,7 +28,7 @@ export const useLocationStatuses = (): LocationStatusesState => {
   const [message, setMessage] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
-  const hasLiveData = useRef(false);
+  const hasServerSnapshot = useRef(false);
 
   const refresh = useCallback(() => {
     setRefreshKey((value) => value + 1);
@@ -69,9 +69,11 @@ export const useLocationStatuses = (): LocationStatusesState => {
           disposed || controller !== requestController ||
           requestController.signal.aborted
         ) return;
-        hasLiveData.current = true;
+        hasServerSnapshot.current = true;
         setSnapshot(response);
-        setPhase('live');
+        // A successful API response can contain no recent sensor readings.
+        setPhase(response.locations.some((location) => location.status === 'OK')
+          ? 'live' : 'waiting');
         setMessage(null);
       } catch (error) {
         if (disposed || controller !== requestController) return;
@@ -86,7 +88,7 @@ export const useLocationStatuses = (): LocationStatusesState => {
               ? error.message
               : '혼잡도 데이터를 불러오지 못했습니다.';
 
-        if (hasLiveData.current) {
+        if (hasServerSnapshot.current) {
           setPhase('stale');
           setMessage('업데이트가 지연되고 있습니다. 마지막 데이터를 표시합니다.');
         } else if (ENABLE_DEMO_FALLBACK) {
