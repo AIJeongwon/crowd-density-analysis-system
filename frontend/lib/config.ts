@@ -10,8 +10,8 @@ const parsePositiveInteger = (
 };
 
 export const API_BASE_URL = (
-  process.env.NEXT_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000'
-).replace(/\/+$/, '');
+  process.env.NEXT_PUBLIC_API_BASE_URL ?? ''
+).trim().replace(/\/+$/, '');
 
 export const KAKAO_MAP_APP_KEY =
   process.env.NEXT_PUBLIC_KAKAO_MAP_APP_KEY?.trim() || '';
@@ -29,7 +29,7 @@ export const STATUS_WINDOW_SECONDS = parsePositiveInteger(
 );
 
 export const ENABLE_DEMO_FALLBACK =
-  (process.env.NEXT_PUBLIC_ENABLE_DEMO_FALLBACK || 'true').toLowerCase() ===
+  (process.env.NEXT_PUBLIC_ENABLE_DEMO_FALLBACK || 'false').toLowerCase() ===
   'true';
 
 export const DEFAULT_MAP_CENTER = {

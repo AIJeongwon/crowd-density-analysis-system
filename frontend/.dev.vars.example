@@ -1,0 +1,3 @@
+# Server-only secret. Copy to .dev.vars and choose a random value.
+# The sensor's CDAS_SENSOR_API_TOKEN must match. Never use NEXT_PUBLIC_ for this.
+SENSOR_API_TOKEN=

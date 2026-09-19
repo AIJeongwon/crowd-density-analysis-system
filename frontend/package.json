@@ -10,7 +10,11 @@
     "build": "vinext build",
     "start": "vinext start",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:api": "node --experimental-strip-types --test tests/worker-api.test.mjs",
+    "db:migrate": "wrangler d1 migrations apply crowd-now-db --local",
+    "db:seed": "wrangler d1 execute crowd-now-db --local --file db/seed.sql",
+    "preview:worker": "wrangler dev --config dist/server/wrangler.json --local --persist-to .wrangler/state"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",
@@ -30,6 +34,7 @@
     "@vitejs/plugin-rsc": "0.5.34",
     "eslint": "9.39.4",
     "eslint-config-next": "16.3.3",
+    "miniflare": "5.20260820.0-alpha",
     "react-server-dom-webpack": "19.2.8",
     "tailwindcss": "4.2.1",
     "typescript": "5.9.3",

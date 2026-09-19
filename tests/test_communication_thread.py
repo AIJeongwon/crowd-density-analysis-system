@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 import queue
 import sys
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 from dataclasses import replace
 from datetime import datetime, timezone
 from http.client import RemoteDisconnected
@@ -41,6 +43,43 @@ def make_environment(root: Path) -> EnvironmentConfig:
 
 
 class CommunicationWorkerTest(unittest.TestCase):
+    def setUp(self) -> None:
+        token_patch = patch.dict(os.environ, {"CDAS_SENSOR_API_TOKEN": ""})
+        token_patch.start()
+        self.addCleanup(token_patch.stop)
+
+    def test_worker_sends_sensor_token_only_with_result(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory, patch.dict(
+            os.environ, {"CDAS_SENSOR_API_TOKEN": "test-token"}
+        ):
+            connection = _FakeConnection([_FakeResponse(201), _FakeResponse(200)])
+            worker = self.make_worker(Path(temporary_directory), _ConnectionFactory([connection]))
+            worker._send_result_until_complete(
+                InferenceResult("pi-001", "gate-1", datetime.now(timezone.utc), 8, 0.75)
+            )
+            worker._heartbeat()
+            self.assertEqual(connection.requests[0][3]["Authorization"], "Bearer test-token")
+            self.assertNotIn("Authorization", connection.requests[1][3])
+
+    def test_worker_rejects_plain_http_token_on_remote_host(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory, patch.dict(
+            os.environ, {"CDAS_SENSOR_API_TOKEN": "test-token"}
+        ):
+            environment = make_environment(Path(temporary_directory))
+            environment = replace(environment, server=replace(
+                environment.server, base_url="http://worker.example.com"
+            ))
+            with self.assertRaisesRegex(CommunicationError, "requires HTTPS"):
+                CommunicationWorker(environment=environment, mailbox=ResultMailbox(),
+                    stop_event=threading.Event(), failure_queue=queue.Queue(), verbose=False)
+
+    def test_worker_rejects_token_with_header_control_characters(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory, patch.dict(
+            os.environ, {"CDAS_SENSOR_API_TOKEN": "test\r\ninjected"}
+        ):
+            with self.assertRaisesRegex(CommunicationError, "whitespace"):
+                self.make_worker(Path(temporary_directory), _ConnectionFactory([]))
+
     def make_worker(
         self,
         root: Path,
@@ -78,6 +117,7 @@ class CommunicationWorkerTest(unittest.TestCase):
             method, path, body, headers = connection.requests[0]
             self.assertEqual((method, path), ("POST", "/api/inference-results"))
             self.assertEqual(headers["Content-Type"], "application/json")
+            self.assertNotIn("Authorization", headers)
             payload = json.loads(body.decode("utf-8"))
             self.assertEqual(payload["people_count"], 8)
             self.assertEqual(connection.requests[1][0:2], ("GET", "/health"))

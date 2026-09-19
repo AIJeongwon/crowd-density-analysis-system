@@ -1,0 +1,21 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "crowd-now",
+  "main": "vinext/server/app-router-entry",
+  "compatibility_date": "2026-08-20",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "assets": {
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*", "/health"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "crowd-now-db",
+      // Local-only placeholder. Replace with YOUR D1 ID before any remote operation.
+      "database_id": "c1ce601a-1b24-4841-bd1d-38ac9f65eea0",
+      "migrations_dir": "migrations"
+    }
+  ]
+}
