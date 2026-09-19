@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchLocationStatuses } from '@/lib/api';
 import {
+  API_REQUEST_TIMEOUT_MS,
   ENABLE_DEMO_FALLBACK,
   REFRESH_INTERVAL_MS,
   STATUS_WINDOW_SECONDS,
@@ -53,26 +54,37 @@ export const useLocationStatuses = (): LocationStatusesState => {
     const run = async () => {
       clearTimer();
       controller?.abort();
-      controller = new AbortController();
+      const requestController = new AbortController();
+      controller = requestController;
+      let timedOut = false;
+      const requestTimeout = setTimeout(() => {
+        timedOut = true;
+        requestController.abort();
+      }, API_REQUEST_TIMEOUT_MS);
       setIsRefreshing(true);
 
       try {
-        const response = await fetchLocationStatuses(controller.signal);
-        if (disposed) return;
+        const response = await fetchLocationStatuses(requestController.signal);
+        if (
+          disposed || controller !== requestController ||
+          requestController.signal.aborted
+        ) return;
         hasLiveData.current = true;
         setSnapshot(response);
         setPhase('live');
         setMessage(null);
       } catch (error) {
-        if (disposed) return;
-        if (error instanceof DOMException && error.name === 'AbortError') {
+        if (disposed || controller !== requestController) return;
+        if (requestController.signal.aborted && !timedOut) {
           return;
         }
 
         const errorMessage =
-          error instanceof Error
-            ? error.message
-            : '혼잡도 데이터를 불러오지 못했습니다.';
+          timedOut
+            ? '서버 응답 시간이 초과되었습니다. 잠시 후 다시 시도합니다.'
+            : error instanceof Error
+              ? error.message
+              : '혼잡도 데이터를 불러오지 못했습니다.';
 
         if (hasLiveData.current) {
           setPhase('stale');
@@ -86,7 +98,10 @@ export const useLocationStatuses = (): LocationStatusesState => {
           setMessage(errorMessage);
         }
       } finally {
-        if (!disposed) {
+        clearTimeout(requestTimeout);
+        // A cancelled older request must not change a newer request's state/timer.
+        if (!disposed && controller === requestController) {
+          controller = null;
           setIsRefreshing(false);
           schedule();
         }

@@ -22,6 +22,9 @@ cp .dev.vars.example .dev.vars
 - 센서 토큰이 비어 있으면 쓰기 요청은 503으로 거부됩니다. 조회와 지도 확인은 가능합니다.
 - 갱신 간격은 `NEXT_PUBLIC_STATUS_POLL_INTERVAL_MS=5000`, 데이터 유효 시간은
   `NEXT_PUBLIC_STATUS_WINDOW_SECONDS=30`입니다. 변경 후 개발 서버를 재시작합니다.
+- API 요청은 `NEXT_PUBLIC_API_TIMEOUT_MS=10000`(기본 10초) 후 취소합니다.
+  시간 초과 시 마지막 데이터를 유지하며 오류/지연 상태를 표시하고, 갱신 간격 후 다시 시도합니다.
+  인원수만 갱신될 때는 사용자가 이동한 지도 위치를 유지합니다.
 
 ```bash
 npm run db:migrate
@@ -100,6 +103,7 @@ Sites의 임시 DB 연결을 사용하지 않습니다. 직접 관리하는 Clou
 ```bash
 npm run typecheck
 npm run test:api
+npm run test:client
 npm run build
 npm run preview:worker
 ```

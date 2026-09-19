@@ -22,6 +22,12 @@ export const REFRESH_INTERVAL_MS = parsePositiveInteger(
   1_000,
 );
 
+export const API_REQUEST_TIMEOUT_MS = parsePositiveInteger(
+  process.env.NEXT_PUBLIC_API_TIMEOUT_MS,
+  10_000,
+  1_000,
+);
+
 export const STATUS_WINDOW_SECONDS = parsePositiveInteger(
   process.env.NEXT_PUBLIC_STATUS_WINDOW_SECONDS,
   30,

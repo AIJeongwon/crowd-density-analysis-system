@@ -12,6 +12,7 @@
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "typecheck": "tsc --noEmit",
     "test:api": "node --experimental-strip-types --test tests/worker-api.test.mjs",
+    "test:client": "node --test tests/client-refresh.test.mjs",
     "db:migrate": "wrangler d1 migrations apply crowd-now-db --local",
     "db:seed": "wrangler d1 execute crowd-now-db --local --file db/seed.sql",
     "preview:worker": "wrangler dev --config dist/server/wrangler.json --local --persist-to .wrangler/state"

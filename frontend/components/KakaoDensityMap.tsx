@@ -120,6 +120,11 @@ export default function KakaoDensityMap({
   const [mode, setMode] = useState<MapMode>(
     KAKAO_MAP_APP_KEY ? 'loading' : 'fallback',
   );
+  const selectedLocation = locations.find(
+    (location) => location.location_id === selectedId,
+  );
+  const selectedLatitude = selectedLocation?.latitude ?? null;
+  const selectedLongitude = selectedLocation?.longitude ?? null;
 
   useEffect(() => {
     onSelectRef.current = onSelect;
@@ -229,14 +234,14 @@ export default function KakaoDensityMap({
   useEffect(() => {
     const map = mapRef.current;
     const maps = mapsRef.current;
-    const selected = locations.find(
-      (location) =>
-        location.location_id === selectedId && hasCoordinates(location),
-    );
-    if (mode === 'ready' && map && maps && selected) {
-      map.panTo(new maps.LatLng(selected.latitude!, selected.longitude!));
+    // Count updates replace locations, but must not reset a user's map position.
+    if (
+      mode === 'ready' && map && maps && selectedId !== null &&
+      selectedLatitude !== null && selectedLongitude !== null
+    ) {
+      map.panTo(new maps.LatLng(selectedLatitude, selectedLongitude));
     }
-  }, [locations, mode, selectedId]);
+  }, [mode, selectedId, selectedLatitude, selectedLongitude]);
 
   useEffect(() => {
     const container = containerRef.current;
