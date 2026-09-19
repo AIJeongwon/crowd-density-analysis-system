@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from debug_images import render_lidar_rgb
 
 
 CENTIKELVIN_OFFSET = 27315.0
@@ -20,6 +21,8 @@ MINIMUM_DISPLAY_SPAN_CELSIUS = 2.0
 DEFAULT_INPUT_SIZE = 160
 CONFIDENCE_THRESHOLD = 0.25
 NMS_THRESHOLD = 0.45
+DEBUG_WINDOW_NAME = "CDAS Thermal and LiDAR Inference"
+DEBUG_WINDOW_SCALE = 4
 
 
 @dataclass(frozen=True)
@@ -302,6 +305,74 @@ def debug_output_path(sensor_data: dict[str, Any]) -> Path | None:
     return Path(output_dir).expanduser() / filename
 
 
+def render_detection_image(
+    image: Any, detections: tuple[Detection, ...], cv2: Any
+) -> Any:
+    annotated = cv2.applyColorMap(image[:, :, 0], cv2.COLORMAP_INFERNO)
+    for detection in detections:
+        x1, y1, x2, y2 = detection.box
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 1)
+        label = f"PERSON {detection.confidence:.2f}"
+        cv2.putText(
+            annotated,
+            label,
+            (x1, max(y1 - 3, 10)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.25,
+            (0, 255, 0),
+            1,
+            cv2.LINE_AA,
+        )
+    cv2.putText(
+        annotated,
+        f"THERMAL | PEOPLE {len(detections)}",
+        (4, 14),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.2,
+        (255, 255, 255),
+        1,
+        cv2.LINE_AA,
+    )
+    return annotated
+
+
+def render_lidar_image(
+    sensor_data: dict[str, Any],
+    np: Any,
+    cv2: Any,
+) -> Any:
+    lidar = sensor_data.get("lidar")
+    if not isinstance(lidar, dict):
+        raise RuntimeError("model input lidar must be a dictionary")
+    debug = sensor_data.get("debug")
+    if not isinstance(debug, dict):
+        debug = {}
+    image_size = debug.get("lidar_image_size", 640)
+    max_distance_m = debug.get("lidar_max_distance_m", 12.0)
+    rgb = render_lidar_rgb(
+        lidar.get("points"),
+        width=image_size,
+        height=image_size,
+        max_distance_m=max_distance_m,
+    )
+    try:
+        image = np.frombuffer(rgb, dtype=np.uint8)
+        image = image.reshape((image_size, image_size, 3)).copy()
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("failed to create LiDAR debug image") from exc
+    cv2.putText(
+        image,
+        f"LIDAR | SEQ {lidar.get('sequence', '?')}",
+        (10, 24),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.6,
+        (255, 255, 255),
+        1,
+        cv2.LINE_AA,
+    )
+    return image
+
+
 def save_debug_detection_image(
     sensor_data: dict[str, Any],
     image: Any,
@@ -315,21 +386,7 @@ def save_debug_detection_image(
     temporary_path: Path | None = None
     try:
         destination.parent.mkdir(parents=True, exist_ok=True)
-        annotated = cv2.applyColorMap(image[:, :, 0], cv2.COLORMAP_INFERNO)
-        for detection in detections:
-            x1, y1, x2, y2 = detection.box
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 1)
-            label = f"PERSON {detection.confidence:.2f}"
-            cv2.putText(
-                annotated,
-                label,
-                (x1, max(y1 - 3, 10)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.3,
-                (0, 255, 0),
-                1,
-                cv2.LINE_AA,
-            )
+        annotated = render_detection_image(image, detections, cv2)
 
         encoded_ok, encoded = cv2.imencode(".png", annotated)
         if not encoded_ok:
@@ -363,6 +420,7 @@ class ModelAdapter:
     def __init__(self, model_path: Path) -> None:
         self.model_path = validate_model_path(model_path)
         self.cv2, self.np, self.ort = load_runtime_dependencies()
+        self._debug_window_created = False
         try:
             options = self.ort.SessionOptions()
             options.graph_optimization_level = (
@@ -380,6 +438,80 @@ class ModelAdapter:
             if isinstance(exc, RuntimeError):
                 raise
             raise RuntimeError(f"failed to open LLVIP ONNX model: {exc}") from exc
+
+    def _show_debug_video(
+        self,
+        sensor_data: dict[str, Any],
+        image: Any,
+        detections: tuple[Detection, ...],
+    ) -> bool:
+        debug = sensor_data.get("debug")
+        if not isinstance(debug, dict) or debug.get("enabled") is not True:
+            return False
+        if not (
+            os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
+        ):
+            raise RuntimeError(
+                "video debug GUI requires an X11 or Wayland display"
+            )
+
+        try:
+            annotated = render_detection_image(image, detections, self.cv2)
+            thermal_panel = self.cv2.resize(
+                annotated,
+                None,
+                fx=DEBUG_WINDOW_SCALE,
+                fy=DEBUG_WINDOW_SCALE,
+                interpolation=self.cv2.INTER_NEAREST,
+            )
+            lidar_image = render_lidar_image(
+                sensor_data,
+                self.np,
+                self.cv2,
+            )
+            panel_size = thermal_panel.shape[0]
+            lidar_panel = self.cv2.resize(
+                lidar_image,
+                (panel_size, panel_size),
+                interpolation=self.cv2.INTER_NEAREST,
+            )
+            display = self.np.concatenate(
+                (thermal_panel, lidar_panel),
+                axis=1,
+            )
+            if not self._debug_window_created:
+                self.cv2.namedWindow(
+                    DEBUG_WINDOW_NAME,
+                    self.cv2.WINDOW_AUTOSIZE,
+                )
+                self._debug_window_created = True
+            self.cv2.imshow(DEBUG_WINDOW_NAME, display)
+            key = self.cv2.waitKey(1) & 0xFF
+            if key in (27, ord("q"), ord("Q")):
+                return True
+            try:
+                visible = self.cv2.getWindowProperty(
+                    DEBUG_WINDOW_NAME,
+                    self.cv2.WND_PROP_VISIBLE,
+                )
+            except Exception:
+                return True
+            return visible < 1.0
+        except Exception as exc:
+            raise RuntimeError(
+                f"failed to show debug video GUI: {exc}"
+            ) from exc
+
+    def close(self) -> None:
+        if not self._debug_window_created:
+            return
+        try:
+            self.cv2.destroyWindow(DEBUG_WINDOW_NAME)
+            self.cv2.waitKey(1)
+        except Exception:
+            pass
+        finally:
+            self._debug_window_created = False
 
     def infer(self, sensor_data: dict[str, Any]) -> dict[str, Any]:
         image = thermal_frame_to_image(sensor_data, self.np)
@@ -435,15 +567,29 @@ class ModelAdapter:
                     Detection(box=box, confidence=candidate.confidence)
                 )
         finalized_detections = tuple(detections)
-        save_debug_detection_image(
-            sensor_data,
-            image,
-            finalized_detections,
-            self.cv2,
-        )
+        stop_requested = False
+        debug = sensor_data.get("debug")
+        if isinstance(debug, dict) and debug.get("enabled") is True:
+            if sensor_data.get("inference_mode") == "video":
+                stop_requested = self._show_debug_video(
+                    sensor_data,
+                    image,
+                    finalized_detections,
+                )
+            else:
+                save_debug_detection_image(
+                    sensor_data,
+                    image,
+                    finalized_detections,
+                    self.cv2,
+                )
 
         if not finalized_detections:
-            return {"people_count": 0, "confidence": 0.0}
+            return {
+                "people_count": 0,
+                "confidence": 0.0,
+                "_stop_requested": stop_requested,
+            }
         selected_confidences = [
             detection.confidence for detection in finalized_detections
         ]
@@ -452,4 +598,5 @@ class ModelAdapter:
             "confidence": float(
                 sum(selected_confidences) / len(selected_confidences)
             ),
+            "_stop_requested": stop_requested,
         }

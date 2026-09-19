@@ -38,6 +38,7 @@ class ModelAdapterWorker(ManagedWorker):
         failure_queue: queue.Queue[ThreadFailure],
         debug: bool,
         verbose: bool,
+        video: bool = False,
         adapter_loader: Callable[[Path, Path], InferenceAdapter] | None = None,
         random_people_count: Callable[[], int] | None = None,
     ) -> None:
@@ -51,6 +52,7 @@ class ModelAdapterWorker(ManagedWorker):
         self.fused_queue = fused_queue
         self.mailbox = mailbox
         self.debug = debug
+        self.video = video
         self.adapter_loader = adapter_loader or load_model_adapter
         self.random_people_count = (
             random_people_count or generate_debug_people_count
@@ -59,41 +61,62 @@ class ModelAdapterWorker(ManagedWorker):
 
     def run_worker(self) -> None:
         adapter = self._load_adapter()
-        while not self.stop_event.is_set():
-            try:
-                fused = self.fused_queue.get(timeout=0.25)
-            except queue.Empty:
-                continue
-            if adapter is None:
-                if not self._random_fallback_enabled:
+        try:
+            while not self.stop_event.is_set():
+                try:
+                    fused = self.fused_queue.get(timeout=0.25)
+                except queue.Empty:
                     continue
-                result = parse_inference_output(
-                    {
-                        "people_count": self.random_people_count(),
-                        "confidence": DEBUG_RANDOM_CONFIDENCE,
-                    },
-                    fused,
-                    self.environment,
-                )
-            else:
-                self.verbose_info("running crowd inference model")
-                output = adapter.infer(
-                    to_model_input(
+                if adapter is None:
+                    if not self._random_fallback_enabled:
+                        continue
+                    result = parse_inference_output(
+                        {
+                            "people_count": self.random_people_count(),
+                            "confidence": DEBUG_RANDOM_CONFIDENCE,
+                        },
                         fused,
-                        debug=self.debug,
-                        debug_dir=self.environment.fusion.debug_dir,
+                        self.environment,
                     )
-                )
-                result = parse_inference_output(output, fused, self.environment)
-            if not self.mailbox.publish(result, self.stop_event):
-                return
-            if adapter is None:
-                self.verbose_info(
-                    "debug mode: random inference queued for server "
-                    "people_count=%d confidence=%.3f",
-                    result.people_count,
-                    result.confidence,
-                )
+                else:
+                    self.verbose_info("running crowd inference model")
+                    output = adapter.infer(
+                        to_model_input(
+                            fused,
+                            debug=self.debug,
+                            debug_dir=self.environment.fusion.debug_dir,
+                            lidar_image_size=(
+                                self.environment.fusion.lidar_image_size
+                            ),
+                            lidar_max_distance_m=(
+                                self.environment.fusion.lidar_max_distance_m
+                            ),
+                            video=self.video,
+                        )
+                    )
+                    if (
+                        isinstance(output, dict)
+                        and output.get("_stop_requested") is True
+                    ):
+                        self.stop_event.set()
+                        return
+                    result = parse_inference_output(
+                        output, fused, self.environment
+                    )
+                if not self.mailbox.publish(result, self.stop_event):
+                    return
+                if adapter is None:
+                    self.verbose_info(
+                        "debug mode: random inference queued for server "
+                        "people_count=%d confidence=%.3f",
+                        result.people_count,
+                        result.confidence,
+                    )
+        finally:
+            if adapter is not None:
+                close_adapter = getattr(adapter, "close", None)
+                if callable(close_adapter):
+                    close_adapter()
 
     def _load_adapter(self) -> InferenceAdapter | None:
         model = self.environment.model
@@ -173,8 +196,12 @@ def to_model_input(
     *,
     debug: bool = False,
     debug_dir: Path | None = None,
+    lidar_image_size: int = 640,
+    lidar_max_distance_m: float = 12.0,
+    video: bool = False,
 ) -> dict[str, Any]:
     return {
+        "inference_mode": "video" if video else "image",
         "fused_at": fused.fused_at.isoformat(),
         "thermal": {
             "captured_at": fused.thermal.captured_at.isoformat(),
@@ -190,6 +217,8 @@ def to_model_input(
         "debug": {
             "enabled": debug,
             "output_dir": str(debug_dir) if debug_dir is not None else None,
+            "lidar_image_size": lidar_image_size,
+            "lidar_max_distance_m": lidar_max_distance_m,
         },
     }
 

@@ -26,10 +26,11 @@
   },
   "model": {
     "adapter_module": "llvip_model_adapter.py",
-    "model_path": "../models/llvip-yolov5l-160.onnx"
+    "model_path": "../models/llvip-yolov5l-160.onnx",
+    "video_inference_fps": 4.0
   },
   "server": {
-    "base_url": "http://0.0.0.0:8000",
+    "base_url": "http://127.0.0.1:3000",
     "request_timeout_seconds": 5.0,
     "heartbeat_interval_seconds": 10.0,
     "heartbeat_warning_seconds": 1.0,

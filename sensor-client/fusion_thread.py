@@ -12,7 +12,9 @@ from shared_runtime import (
     ThermalFrame,
     ThreadFailure,
     drain_queue,
+    put_latest_with_stop,
     put_with_stop,
+    take_latest,
 )
 
 
@@ -28,6 +30,7 @@ class FusionWorker(ManagedWorker):
         failure_queue: queue.Queue[ThreadFailure],
         debug: bool,
         verbose: bool,
+        video: bool = False,
     ) -> None:
         super().__init__(
             name="Fusion",
@@ -41,13 +44,26 @@ class FusionWorker(ManagedWorker):
         self.fused_queue = fused_queue
         self.debug = debug
         self.check_count = 0
+        self.video = video
+        self.video_interval_seconds = (
+            1.0 / environment.model.video_inference_fps
+        )
+        self._latest_lidar: LidarScan | None = None
 
     def run_worker(self) -> None:
+        interval_seconds = (
+            self.video_interval_seconds
+            if self.video
+            else self.config.poll_interval_seconds
+        )
         while not self.stop_event.is_set():
             self.check_once()
-            self.stop_event.wait(self.config.poll_interval_seconds)
+            self.stop_event.wait(interval_seconds)
 
     def check_once(self) -> FusedSensorData | None:
+        if self.video:
+            return self._check_video_once()
+
         self.check_count += 1
         if self.check_count % self.config.flush_every_checks == 0:
             thermal_count = drain_queue(self.thermal_queue)
@@ -79,6 +95,34 @@ class FusionWorker(ManagedWorker):
         self.verbose_info(
             "fused thermal frame and LiDAR scan sequence=%d and queued result",
             lidar.sequence,
+        )
+        return fused
+
+    def _check_video_once(self) -> FusedSensorData | None:
+        thermal = take_latest(self.thermal_queue)
+        latest_lidar = take_latest(self.lidar_queue)
+        if latest_lidar is not None:
+            self._latest_lidar = latest_lidar
+        if thermal is None or self._latest_lidar is None:
+            return None
+
+        fused = FusedSensorData(
+            fused_at=max(
+                thermal.captured_at,
+                self._latest_lidar.captured_at,
+            ),
+            thermal=thermal,
+            lidar=self._latest_lidar,
+        )
+        if not put_latest_with_stop(
+            self.fused_queue,
+            fused,
+            self.stop_event,
+        ):
+            return None
+        self.verbose_info(
+            "fused latest video frame with LiDAR scan sequence=%d",
+            self._latest_lidar.sequence,
         )
         return fused
 

@@ -16,6 +16,7 @@ from shared_runtime import (
     ManagedWorker,
     SensorError,
     ThreadFailure,
+    put_latest_with_stop,
     put_with_stop,
     stop_process,
 )
@@ -30,6 +31,7 @@ class LidarSensorWorker(ManagedWorker):
         stop_event: threading.Event,
         failure_queue: queue.Queue[ThreadFailure],
         verbose: bool,
+        video: bool = False,
         process_factory: Callable[..., subprocess.Popen[str]] = subprocess.Popen,
         validate_hardware: bool = True,
     ) -> None:
@@ -41,6 +43,7 @@ class LidarSensorWorker(ManagedWorker):
         )
         self.config = environment.lidar
         self.output_queue = output_queue
+        self.video = video
         self.process_factory = process_factory
         self.validate_hardware = validate_hardware
 
@@ -175,5 +178,10 @@ class LidarSensorWorker(ManagedWorker):
             sequence=sequence,
             points=tuple(points),
         )
-        if put_with_stop(self.output_queue, scan, self.stop_event):
+        publish = (
+            put_latest_with_stop
+            if self.video
+            else put_with_stop
+        )
+        if publish(self.output_queue, scan, self.stop_event):
             self.verbose_info("received SLAMTEC C1 scan sequence=%d", sequence)

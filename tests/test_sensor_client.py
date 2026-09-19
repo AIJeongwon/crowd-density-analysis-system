@@ -153,6 +153,7 @@ class SensorConfigurationTest(unittest.TestCase):
             self.assertEqual(environment.lidar.bridge_path, (root / "bin/bridge").resolve())
             self.assertEqual(environment.fusion.flush_every_checks, 10)
             self.assertEqual(environment.server.base_url, "http://127.0.0.1:8000")
+            self.assertEqual(environment.model.video_inference_fps, 4.0)
 
     def test_default_environment_path_is_in_sensor_client_directory(self) -> None:
         self.assertEqual(
@@ -160,11 +161,13 @@ class SensorConfigurationTest(unittest.TestCase):
             SENSOR_CLIENT_DIR / "environment.json",
         )
 
-    def test_cli_accepts_only_debug_and_verbose_flags(self) -> None:
+    def test_cli_accepts_debug_video_and_verbose_flags(self) -> None:
         parser = build_argument_parser()
-        args = parser.parse_args(["--debug", "--verbose"])
+        args = parser.parse_args(["--debug", "--video", "--verbose"])
         self.assertTrue(args.debug)
+        self.assertTrue(args.video)
         self.assertTrue(args.verbose)
+        self.assertTrue(parser.parse_args(["-v"]).video)
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             parser.parse_args(["--ip", "127.0.0.1"])
 
@@ -214,6 +217,21 @@ class FusionWorkerTest(unittest.TestCase):
         self.assertTrue(self.thermal_queue.empty())
         self.assertTrue(self.lidar_queue.empty())
         self.assertTrue(self.fused_queue.empty())
+
+    def test_video_mode_fuses_only_latest_sensor_values(self) -> None:
+        now = datetime.now(timezone.utc)
+        self.worker.video = True
+        self.thermal_queue.put(ThermalFrame(now, (1,), width=1, height=1))
+        self.thermal_queue.put(ThermalFrame(now, (2,), width=1, height=1))
+        self.lidar_queue.put(LidarScan(now, 1, ()))
+        self.lidar_queue.put(LidarScan(now, 2, ()))
+
+        fused = self.worker.check_once()
+        self.assertIsNotNone(fused)
+        self.assertEqual(fused.thermal.pixels, (2,))
+        self.assertEqual(fused.lidar.sequence, 2)
+        self.assertTrue(self.thermal_queue.empty())
+        self.assertTrue(self.lidar_queue.empty())
 
 
 class AdapterAndMailboxTest(unittest.TestCase):
@@ -440,6 +458,25 @@ class SensorParsingTest(unittest.TestCase):
                 (120 * 160) - 1,
             )
             self.assertEqual(frame.pixels[-1], 159)
+
+    def test_video_command_streams_raw_frames_to_stdout(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            environment = make_environment(Path(temporary_directory))
+
+            worker = ThermalSensorWorker(
+                environment=environment,
+                output_queue=queue.Queue(),
+                stop_event=threading.Event(),
+                failure_queue=queue.Queue(),
+                verbose=False,
+                video=True,
+                validate_hardware=False,
+            )
+            command = worker.build_video_command()
+            self.assertIn("--stream-to=-", command)
+            self.assertFalse(
+                any(value.startswith("--stream-count") for value in command)
+            )
 
     def test_lidar_bridge_record_is_parsed_into_scan(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

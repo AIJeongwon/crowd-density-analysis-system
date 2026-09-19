@@ -86,6 +86,7 @@ class ModelAdapterLoaderTest(unittest.TestCase):
             fused,
             debug=True,
             debug_dir=Path("/tmp/cdas"),
+            video=True,
         )
 
         self.assertEqual(
@@ -93,8 +94,11 @@ class ModelAdapterLoaderTest(unittest.TestCase):
             {
                 "enabled": True,
                 "output_dir": "/tmp/cdas",
+                "lidar_image_size": 640,
+                "lidar_max_distance_m": 12.0,
             },
         )
+        self.assertEqual(payload["inference_mode"], "video")
 
 
 if __name__ == "__main__":

@@ -35,10 +35,12 @@ class SensorClientApplication:
         *,
         debug: bool,
         verbose: bool,
+        video: bool = False,
     ) -> None:
         self.environment = environment
         self.debug = debug
         self.verbose = verbose
+        self.video = video
         self.stop_event = threading.Event()
         self.failure_queue: queue.Queue[ThreadFailure] = queue.Queue()
         self.thermal_queue: queue.Queue[ThermalFrame] = queue.Queue(
@@ -66,6 +68,7 @@ class SensorClientApplication:
                 fused_queue=self.fused_queue,
                 mailbox=self.mailbox,
                 debug=self.debug,
+                video=self.video,
                 **common,
             ),
             FusionWorker(
@@ -73,10 +76,19 @@ class SensorClientApplication:
                 lidar_queue=self.lidar_queue,
                 fused_queue=self.fused_queue,
                 debug=self.debug,
+                video=self.video,
                 **common,
             ),
-            ThermalSensorWorker(output_queue=self.thermal_queue, **common),
-            LidarSensorWorker(output_queue=self.lidar_queue, **common),
+            ThermalSensorWorker(
+                output_queue=self.thermal_queue,
+                video=self.video,
+                **common,
+            ),
+            LidarSensorWorker(
+                output_queue=self.lidar_queue,
+                video=self.video,
+                **common,
+            ),
         ]
 
     def run(self) -> int:
@@ -142,9 +154,15 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "--debug",
         action="store_true",
         help=(
-            "save fused sensor debug images and use random inference when "
-            "the adapter module is unavailable"
+            "save image-mode debug PNGs or show the video-mode GUI; use "
+            "random inference when the adapter module is unavailable"
         ),
+    )
+    parser.add_argument(
+        "--video",
+        "-v",
+        action="store_true",
+        help="use continuous video inference instead of image inference",
     )
     parser.add_argument(
         "--verbose",
@@ -166,6 +184,7 @@ def main(argv: list[str] | None = None) -> int:
         environment,
         debug=args.debug,
         verbose=args.verbose,
+        video=args.video,
     )
     return application.run()
 

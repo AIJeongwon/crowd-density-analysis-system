@@ -186,6 +186,36 @@ def put_with_stop(
     return False
 
 
+def put_latest_with_stop(
+    target_queue: queue.Queue[Any],
+    value: Any,
+    stop_event: threading.Event,
+) -> bool:
+    """Publish without backlog by discarding the oldest queued value."""
+
+    while not stop_event.is_set():
+        try:
+            target_queue.put_nowait(value)
+            return True
+        except queue.Full:
+            try:
+                target_queue.get_nowait()
+            except queue.Empty:
+                continue
+    return False
+
+
+def take_latest(target_queue: queue.Queue[Any]) -> Any | None:
+    """Drain a queue and return only its newest value."""
+
+    latest: Any | None = None
+    while True:
+        try:
+            latest = target_queue.get_nowait()
+        except queue.Empty:
+            return latest
+
+
 def drain_queue(target_queue: queue.Queue[Any]) -> int:
     count = 0
     while True:
@@ -196,7 +226,7 @@ def drain_queue(target_queue: queue.Queue[Any]) -> int:
             return count
 
 
-def stop_process(process: subprocess.Popen[str]) -> None:
+def stop_process(process: subprocess.Popen[Any]) -> None:
     if process.poll() is not None:
         return
     process.terminate()

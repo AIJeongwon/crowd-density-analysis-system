@@ -51,15 +51,14 @@ def save_thermal_png(
     return destination
 
 
-def save_lidar_png(
+def render_lidar_rgb(
     points: Iterable[object],
-    path: str | PathLike[str],
     *,
     width: int = 640,
     height: int = 640,
     max_distance_m: float = 12.0,
-) -> Path:
-    """Save ``[angle_deg, distance_mm, quality]`` samples as an RGB PNG."""
+) -> bytes:
+    """Render ``[angle_deg, distance_mm, quality]`` samples as RGB bytes."""
 
     _validate_dimension(width, "width")
     _validate_dimension(height, "height")
@@ -103,6 +102,25 @@ def save_lidar_png(
         offset = (y * width + x) * 3
         rgb[offset : offset + 3] = b"\xff\xff\xff"
 
+    return bytes(rgb)
+
+
+def save_lidar_png(
+    points: Iterable[object],
+    path: str | PathLike[str],
+    *,
+    width: int = 640,
+    height: int = 640,
+    max_distance_m: float = 12.0,
+) -> Path:
+    """Save ``[angle_deg, distance_mm, quality]`` samples as an RGB PNG."""
+
+    rgb = render_lidar_rgb(
+        points,
+        width=width,
+        height=height,
+        max_distance_m=max_distance_m,
+    )
     destination = Path(path)
     _atomic_write(destination, _encode_rgb_png(width, height, rgb))
     return destination

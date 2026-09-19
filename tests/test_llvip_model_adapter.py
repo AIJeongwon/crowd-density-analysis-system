@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+from unittest.mock import MagicMock, patch
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -162,6 +163,43 @@ class LlvipModelAdapterTest(unittest.TestCase):
         )
 
         self.assertIsNone(path)
+
+    def test_video_debug_gui_opens_window_and_stops_on_q(self) -> None:
+        model = adapter.ModelAdapter.__new__(adapter.ModelAdapter)
+        model.cv2 = MagicMock()
+        model.np = MagicMock()
+        model._debug_window_created = False
+        model.cv2.COLORMAP_INFERNO = 1
+        model.cv2.FONT_HERSHEY_SIMPLEX = 2
+        model.cv2.LINE_AA = 3
+        model.cv2.INTER_NEAREST = 4
+        model.cv2.WINDOW_AUTOSIZE = 5
+        model.cv2.WND_PROP_VISIBLE = 6
+        model.cv2.applyColorMap.return_value = object()
+        thermal_panel = MagicMock()
+        thermal_panel.shape = (640, 480, 3)
+        model.cv2.resize.side_effect = [thermal_panel, object()]
+        model.cv2.waitKey.return_value = ord("q")
+        model.np.concatenate.return_value = object()
+
+        with patch.dict(adapter.os.environ, {"DISPLAY": ":0"}, clear=True):
+            stop_requested = model._show_debug_video(
+                {
+                    "debug": {
+                        "enabled": True,
+                        "lidar_image_size": 64,
+                        "lidar_max_distance_m": 12.0,
+                    },
+                    "lidar": {"sequence": 7, "points": ()},
+                },
+                MagicMock(),
+                (),
+            )
+
+        self.assertTrue(stop_requested)
+        model.cv2.namedWindow.assert_called_once()
+        model.cv2.imshow.assert_called_once()
+        model.np.concatenate.assert_called_once()
 
     @unittest.skipIf(
         np is None or cv2 is None,

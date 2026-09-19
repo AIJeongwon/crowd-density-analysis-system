@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import os
 import queue
+import selectors
 import shutil
 import subprocess
 import tempfile
 import threading
+import time
 from array import array
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,9 +25,15 @@ from shared_runtime import (
     ThreadFailure,
     Y16_FOURCC,
     decode_process_output,
+    put_latest_with_stop,
     put_with_stop,
     python_is_little_endian,
+    stop_process,
 )
+
+
+VIDEO_READ_CHUNK_BYTES = THERMAL_FRAME_BYTES * 2
+STDERR_TAIL_BYTES = 4096
 
 
 class ThermalSensorWorker(ManagedWorker):
@@ -37,7 +45,9 @@ class ThermalSensorWorker(ManagedWorker):
         stop_event: threading.Event,
         failure_queue: queue.Queue[ThreadFailure],
         verbose: bool,
+        video: bool = False,
         runner: Callable[..., subprocess.CompletedProcess[bytes]] = subprocess.run,
+        process_factory: Callable[..., subprocess.Popen[bytes]] = subprocess.Popen,
         validate_hardware: bool = True,
     ) -> None:
         super().__init__(
@@ -48,7 +58,9 @@ class ThermalSensorWorker(ManagedWorker):
         )
         self.config = environment.thermal
         self.output_queue = output_queue
+        self.video = video
         self.runner = runner
+        self.process_factory = process_factory
         self.validate_hardware = validate_hardware
 
     def run_worker(self) -> None:
@@ -59,6 +71,10 @@ class ThermalSensorWorker(ManagedWorker):
                 raise SensorError(
                     f"thermal device does not exist: {self.config.device_path}"
                 )
+
+        if self.video:
+            self._run_video_stream()
+            return
 
         while not self.stop_event.is_set():
             self.verbose_info(
@@ -112,6 +128,111 @@ class ThermalSensorWorker(ManagedWorker):
         finally:
             temporary_path.unlink(missing_ok=True)
 
+        return self._decode_frame(frame_bytes, captured_at)
+
+    def build_video_command(self) -> list[str]:
+        return [
+            "v4l2-ctl",
+            f"--device={self.config.device_path}",
+            (
+                "--set-fmt-video="
+                f"width={THERMAL_WIDTH},height={THERMAL_HEIGHT},"
+                f"pixelformat={Y16_FOURCC}"
+            ),
+            "--stream-mmap=4",
+            "--stream-to=-",
+        ]
+
+    def _run_video_stream(self) -> None:
+        command = self.build_video_command()
+        self.verbose_info(
+            "streaming Lepton 3.5 video on %s",
+            self.config.device_path,
+        )
+        try:
+            process = self.process_factory(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                bufsize=0,
+            )
+        except OSError as exc:
+            raise SensorError(f"failed to start Lepton video stream: {exc}") from exc
+
+        try:
+            self._consume_video_stream(process)
+        finally:
+            stop_process(process)
+
+    def _consume_video_stream(self, process: subprocess.Popen[bytes]) -> None:
+        if process.stdout is None or process.stderr is None:
+            raise SensorError("Lepton video stream pipes were not created")
+
+        selector = selectors.DefaultSelector()
+        selector.register(process.stdout, selectors.EVENT_READ, "stdout")
+        selector.register(process.stderr, selectors.EVENT_READ, "stderr")
+        pending = bytearray()
+        stderr_tail = bytearray()
+        last_frame_at = time.monotonic()
+        try:
+            while not self.stop_event.is_set():
+                for key, _ in selector.select(timeout=0.25):
+                    try:
+                        chunk = os.read(key.fileobj.fileno(), VIDEO_READ_CHUNK_BYTES)
+                    except OSError as exc:
+                        raise SensorError(
+                            f"failed to read Lepton video stream: {exc}"
+                        ) from exc
+                    if not chunk:
+                        try:
+                            selector.unregister(key.fileobj)
+                        except KeyError:
+                            pass
+                        continue
+                    if key.data == "stderr":
+                        stderr_tail.extend(chunk)
+                        if len(stderr_tail) > STDERR_TAIL_BYTES:
+                            del stderr_tail[:-STDERR_TAIL_BYTES]
+                        continue
+
+                    pending.extend(chunk)
+                    while len(pending) >= THERMAL_FRAME_BYTES:
+                        frame_bytes = bytes(pending[:THERMAL_FRAME_BYTES])
+                        del pending[:THERMAL_FRAME_BYTES]
+                        frame = self._decode_frame(
+                            frame_bytes,
+                            datetime.now(timezone.utc),
+                        )
+                        if not put_latest_with_stop(
+                            self.output_queue,
+                            frame,
+                            self.stop_event,
+                        ):
+                            return
+                        last_frame_at = time.monotonic()
+
+                return_code = process.poll()
+                if return_code is not None:
+                    if self.stop_event.is_set():
+                        return
+                    detail = decode_process_output(bytes(stderr_tail))
+                    raise SensorError(
+                        "Lepton video stream exited with status "
+                        f"{return_code}: {detail}"
+                    )
+                if (
+                    time.monotonic() - last_frame_at
+                    > self.config.capture_timeout_seconds
+                ):
+                    raise SensorError("Lepton video stream timed out")
+        finally:
+            selector.close()
+
+    def _decode_frame(
+        self,
+        frame_bytes: bytes,
+        captured_at: datetime,
+    ) -> ThermalFrame:
         if len(frame_bytes) != THERMAL_FRAME_BYTES:
             raise SensorError(
                 f"invalid Y16 frame size: expected {THERMAL_FRAME_BYTES}, "

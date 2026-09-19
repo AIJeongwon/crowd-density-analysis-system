@@ -51,6 +51,7 @@ class FusionConfig:
 class ModelConfig:
     adapter_module: Path | None
     model_path: Path | None
+    video_inference_fps: float = 4.0
 
 
 @dataclass(frozen=True)
@@ -133,6 +134,9 @@ def load_environment(
         model=ModelConfig(
             adapter_module=_optional_path(base_dir, model, "adapter_module"),
             model_path=_optional_path(base_dir, model, "model_path"),
+            video_inference_fps=_positive_float_or_default(
+                model, "video_inference_fps", 4.0
+            ),
         ),
         server=ServerConfig(
             base_url=_http_url(_string(server, "base_url")),
@@ -177,6 +181,16 @@ def _positive_float(section: dict[str, Any], key: str) -> float:
     if not math.isfinite(normalized) or normalized <= 0:
         raise ConfigurationError(f"{key} must be a positive number")
     return normalized
+
+
+def _positive_float_or_default(
+    section: dict[str, Any],
+    key: str,
+    default: float,
+) -> float:
+    if key not in section:
+        return default
+    return _positive_float(section, key)
 
 
 def _positive_int(section: dict[str, Any], key: str) -> int:
