@@ -133,7 +133,7 @@ frontend/.env.local의 NEXT_PUBLIC_KAKAO_MAP_APP_KEY에 카카오 Developers
 JavaScript 키를 넣고 허용 도메인에 로컬 및 운영 도메인을 등록한다.
 Workers API를 사용할 때는 NEXT_PUBLIC_API_BASE_URL을 비워 둔다.
 센서 전송을 받으려면 frontend/.dev.vars의 SENSOR_API_TOKEN과
-센서 프로세스의 CDAS_SENSOR_API_TOKEN을 동일하게 설정한다.
+sensor-client/environment.json의 server.api_token을 동일하게 설정한다.
 웹은 GET /api/locations/statuses를 기본 5초마다 조회하며,
 NEXT_PUBLIC_STATUS_POLL_INTERVAL_MS로 주기를 바꿀 수 있다.
 

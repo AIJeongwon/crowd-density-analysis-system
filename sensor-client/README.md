@@ -21,7 +21,25 @@ LidarSensor   ─> lidar queue   ─┘                                 │
 - `ModelAdapter`: 결합 데이터를 모델 플러그인에 전달해 `people_count`와 `confidence`를 얻는다.
 - `Communication`: 단일 슬롯 mailbox의 결과와 heartbeat를 하나의 HTTP/1.1 연결로 순차 전송한다. 슬롯이 빌 때까지 생산자가 대기하므로 전송 전 결과를 덮어쓰지 않는다.
 
-복구할 수 없는 센서·모델·통신 오류는 Main에 전달되어 전체 프로세스를 종료한다. `Ctrl+C`도 모든 스레드와 공유 자원을 정상 종료한다.
+센서·모델·통신 등 작업 스레드의 오류는 Main에 전달됩니다. Main은 계속 실행되며,
+`runtime.worker_restart_delay_seconds`(기본 5초) 후 오류가 난 스레드만 새 객체로 생성합니다.
+다시 실패해도 횟수 제한 없이 같은 간격으로 재시도합니다. 오류 메시지와 재시도 대기는
+ERROR, 스레드를 다시 시작한 사실은 INFO로 출력하며 `--verbose` 없이도 확인할 수 있습니다.
+
+기존 스레드가 센서 프로세스·모델·연결 정리를 마치고 완전히 종료한 뒤에만 새 스레드를
+시작하므로 같은 장치를 중복으로 열지 않습니다. 다른 스레드와 크기가 제한된 공유 큐는
+유지되며, 데이터가 없거나 큐가 가득 차면 해당 단계가 대기합니다. 스레드 생성·시작 실패와
+종료 요청 없는 예기치 않은 스레드 종료도 재시도합니다. 재시작 직전 처리 중이던 프레임이나
+전송 결과의 재처리를 보장하지는 않습니다.
+
+`Ctrl+C` 또는 영상 GUI의 정상 종료 요청 시에는 재시도를 취소하고 모든 스레드와 공유
+자원을 종료합니다. 대기 중에도 `Ctrl+C`로 종료할 수 있습니다. 시작 시 설정 JSON을 읽거나
+검증하지 못한 오류는 실행 전에 종료되며, 실행 중 설정 파일을 자동으로 다시 읽지는 않습니다.
+이 기능은 자식 스레드의 오류 복구이며, 부팅 시 프로그램을 실행하는 서비스 등록은 별도로 필요합니다.
+
+구현 위치는 `sensor-client/sensor_client.py`의 `SensorClientApplication.run()`,
+`_start_worker()`, `_schedule_restart()`, `_supervise_workers()`, `shutdown()`과
+`sensor-client/shared_runtime.py`의 `ManagedWorker.run()`입니다.
 
 ## 하드웨어 준비
 
@@ -85,12 +103,34 @@ make
 ### Workers + D1 연결
 
 Workers 구성에서는 `server.base_url`을 지도 웹과 동일한 HTTPS 주소로 설정합니다.
-센서 프로세스의 `CDAS_SENSOR_API_TOKEN` 환경변수에 Worker의 `SENSOR_API_TOKEN`과
+환경 설정의 `server.api_token`에 Worker의 `SENSOR_API_TOKEN`과
 동일한 값을 지정하면 `CommunicationWorker._send_result_until_complete()`가
-측정값 전송에만 Bearer 인증 헤더를 추가합니다. 토큰은 JSON 설정이나 저장소에 기록하지 마세요.
-토큰을 설정한 상태에서 localhost 외의 평문 HTTP 주소를 사용하면 시작 시 오류를 반환합니다.
-기존 Python 서버를 사용할 때는 토큰 환경변수를 비워 기존 동작을 유지할 수 있습니다.
+측정값 전송에만 Bearer 인증 헤더를 추가합니다. `Bearer` 접두사는 붙이지 않습니다.
+토큰을 설정한 상태에서 localhost 외의 평문 HTTP 주소를 사용하면 통신 스레드 시작 시
+오류를 기록하고 설정된 간격으로 재시도합니다. 연결하려면 올바른 HTTPS 주소를 설정해야 합니다.
+기존 Python 서버를 사용할 때는 `server.api_token`을 `null`로 두어 기존 동작을 유지할 수 있습니다.
 자세한 초기화 절차는 [Workers 웹 실행 안내](../frontend/README.md)를 참고하세요.
+
+#### 토큰 설정
+
+`sensor-client/environment.json`은 Git에서 제외되므로 장치별 실제 토큰을 이 파일에만
+저장합니다. 예시 파일을 복사한 뒤 `server` 항목을 다음과 같이 수정합니다.
+
+```json
+"server": {
+  "base_url": "https://sensor-api.example.com",
+  "api_token": "YOUR_SENSOR_API_TOKEN"
+}
+```
+
+- 실제 `environment.json`은 커밋하지 않습니다. `environment.example.json`에는 항상
+  `"api_token": null`만 유지합니다.
+- 토큰에는 공백이나 줄바꿈을 넣을 수 없으며 출력 가능한 ASCII 문자만 사용합니다.
+- 센서 모듈 3대에 같은 값을 설정하고, 각 모듈의 `node_id`는 서로 다르게 지정합니다.
+
+구현 위치는 `environment_config.py`의 `load_environment()`와
+`_optional_api_token()`, `communication_thread.py`의
+`CommunicationWorker.__init__()` 및 `_send_result_until_complete()`입니다.
 
 프로젝트 루트에서 예시를 클라이언트 디렉터리로 복사한다.
 
@@ -107,6 +147,7 @@ Copy-Item sensor-client/environment.example.json sensor-client/environment.json
 | 항목                                       | 설명                                                  |
 | ------------------------------------------ | ----------------------------------------------------- |
 | `node.*`                                   | 노드와 설치 위치 ID                                   |
+| `runtime.worker_restart_delay_seconds`     | 자식 스레드 오류 후 재시작 대기 시간(초). 양수, 기본 `5.0`, 재시도 횟수 제한 없음 |
 | `thermal.*`                                | V4L2 장치, 수집 주기와 제한 시간                      |
 | `lidar.*`                                  | C1 브리지·직렬 장치, baud rate, scan mode와 제한 시간 |
 | `fusion.poll_interval_seconds`             | Fusion의 큐 확인 주기                                 |
@@ -115,6 +156,7 @@ Copy-Item sensor-client/environment.example.json sensor-client/environment.json
 | `fusion.debug_dir`                         | 디버그 이미지 폴더. 예시는 `/tmp/cdas`                |
 | `model.adapter_module`, `model.model_path` | 모델 어댑터와 모델 파일                               |
 | `model.video_inference_fps`                | 영상 모드에서 초당 수행할 추론 횟수. 기본값은 `4.0`   |
+| `server.api_token`                         | Workers 전송 인증 토큰. 미사용 시 `null`              |
 | `server.*`                                 | 백엔드 주소, 요청·heartbeat 시간과 연속 실패 한도     |
 
 상대 경로는 `environment.json` 위치를 기준으로 해석한다. 실제 장치, 서버 IP, ID, 모델 경로로 수정하며 운영 설정은 커밋하지 않는다.

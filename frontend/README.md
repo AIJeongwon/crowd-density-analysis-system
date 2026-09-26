@@ -52,10 +52,10 @@ npm run dev
 센서의 `environment.json`에서 `server.base_url`을 로컬 웹 주소 또는 나중에 배포한 HTTPS 주소로 지정합니다.
 같은 PC 테스트라면 `http://127.0.0.1:3000`입니다. Raspberry Pi에서 `localhost`는 Pi 자체를 의미합니다.
 
-센서 프로세스 환경에 `CDAS_SENSOR_API_TOKEN`을 설정합니다. 값은 Worker의 `SENSOR_API_TOKEN`과 같아야 합니다.
-운영에서는 서비스 관리자 등의 비밀 환경 설정을 사용하고 저장소에 커밋하지 마세요.
+`sensor-client/environment.json`의 `server.api_token`을 Worker의 `SENSOR_API_TOKEN`과 같은 값으로 설정합니다.
+실제 `environment.json`은 Git에서 제외되며 저장소에 커밋하지 마세요.
 토큰을 설정한 센서는 localhost 외의 평문 HTTP 전송을 거부합니다. Pi의 원격 연결에는 HTTPS가 필요합니다.
-토큰이 없는 기존 Python 서버로 연결할 때는 해당 환경변수를 비웁니다.
+토큰이 없는 기존 Python 서버로 연결할 때는 `server.api_token`을 `null`로 둡니다.
 
 로컬 수동 요청 예시입니다. `SENSOR_API_TOKEN`은 테스트 터미널에도 별도로 안전하게 설정해야 합니다.
 
