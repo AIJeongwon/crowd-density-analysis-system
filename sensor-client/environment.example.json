@@ -3,6 +3,9 @@
     "node_id": "raspberry-pi-001",
     "location_id": "moran-market-gate-1"
   },
+  "runtime": {
+    "worker_restart_delay_seconds": 5.0
+  },
   "thermal": {
     "device_path": "/dev/video0",
     "capture_interval_seconds": 1.0,
@@ -31,6 +34,7 @@
   },
   "server": {
     "base_url": "http://127.0.0.1:3000",
+    "api_token": null,
     "request_timeout_seconds": 5.0,
     "heartbeat_interval_seconds": 10.0,
     "heartbeat_warning_seconds": 1.0,

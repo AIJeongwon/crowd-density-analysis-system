@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import queue
 import threading
 import time
@@ -55,10 +54,14 @@ class CommunicationWorker(ManagedWorker):
         self._host = parsed_url.hostname
         self._port = port
         self._base_path = parsed_url.path.rstrip("/")
-        # Keep the write credential out of environment.json and source control.
-        self._api_token = os.environ.get("CDAS_SENSOR_API_TOKEN", "").strip()
-        if any(character.isspace() for character in self._api_token):
-            raise CommunicationError("CDAS_SENSOR_API_TOKEN must not contain whitespace")
+        self._api_token = self.config.api_token or ""
+        if any(
+            ord(character) < 0x21 or ord(character) > 0x7E
+            for character in self._api_token
+        ):
+            raise CommunicationError(
+                "server.api_token must contain visible ASCII characters without whitespace"
+            )
         if self._api_token and self._scheme != "https" and self._host not in {
             "localhost", "127.0.0.1", "::1"
         }:

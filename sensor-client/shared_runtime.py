@@ -161,8 +161,8 @@ class ManagedWorker(threading.Thread):
         except Exception as exc:
             message = f"{type(exc).__name__}: {exc}"
             LOGGER.error(message)
+            # Main schedules a replacement; the shared event is for shutdown only.
             self.failure_queue.put(ThreadFailure(self.name, message))
-            self.stop_event.set()
 
     def run_worker(self) -> None:
         raise NotImplementedError

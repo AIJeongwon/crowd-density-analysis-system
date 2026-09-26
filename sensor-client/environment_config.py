@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +61,12 @@ class ServerConfig:
     heartbeat_interval_seconds: float
     heartbeat_warning_seconds: float
     max_consecutive_failures: int
+    api_token: str | None = None
+
+
+@dataclass(frozen=True)
+class RuntimeConfig:
+    worker_restart_delay_seconds: float = 5.0
 
 
 @dataclass(frozen=True)
@@ -71,6 +77,7 @@ class EnvironmentConfig:
     fusion: FusionConfig
     model: ModelConfig
     server: ServerConfig
+    runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
 
 
 def load_environment(
@@ -96,6 +103,7 @@ def load_environment(
     fusion = _section(payload, "fusion")
     model = _section(payload, "model")
     server = _section(payload, "server")
+    runtime = _section(payload, "runtime") if "runtime" in payload else {}
 
     return EnvironmentConfig(
         node=NodeConfig(
@@ -151,6 +159,12 @@ def load_environment(
             ),
             max_consecutive_failures=_positive_int(
                 server, "max_consecutive_failures"
+            ),
+            api_token=_optional_api_token(server, "api_token"),
+        ),
+        runtime=RuntimeConfig(
+            worker_restart_delay_seconds=_positive_float_or_default(
+                runtime, "worker_restart_delay_seconds", 5.0
             ),
         ),
     )
@@ -228,3 +242,22 @@ def _http_url(value: str) -> str:
     if not normalized.startswith(("http://", "https://")):
         raise ConfigurationError("server.base_url must start with http:// or https://")
     return normalized
+
+
+def _optional_api_token(
+    section: dict[str, Any],
+    key: str,
+) -> str | None:
+    value = section.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ConfigurationError(f"server.{key} must be a string or null")
+    if not value or any(
+        ord(character) < 0x21 or ord(character) > 0x7E
+        for character in value
+    ):
+        raise ConfigurationError(
+            f"server.{key} must contain visible ASCII characters without whitespace"
+        )
+    return value
