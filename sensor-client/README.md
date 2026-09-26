@@ -35,7 +35,7 @@ ERROR, 스레드를 다시 시작한 사실은 INFO로 출력하며 `--verbose` 
 `Ctrl+C` 또는 영상 GUI의 정상 종료 요청 시에는 재시도를 취소하고 모든 스레드와 공유
 자원을 종료합니다. 대기 중에도 `Ctrl+C`로 종료할 수 있습니다. 시작 시 설정 JSON을 읽거나
 검증하지 못한 오류는 실행 전에 종료되며, 실행 중 설정 파일을 자동으로 다시 읽지는 않습니다.
-이 기능은 자식 스레드의 오류 복구이며, 부팅 시 프로그램을 실행하는 서비스 등록은 별도로 필요합니다.
+부팅 시 자동 실행은 아래의 `install_service.sh`로 서비스에 등록할 수 있습니다.
 
 구현 위치는 `sensor-client/sensor_client.py`의 `SensorClientApplication.run()`,
 `_start_worker()`, `_schedule_restart()`, `_supervise_workers()`, `shutdown()`과
@@ -209,7 +209,7 @@ echo "f553ac510ee4cfe50adc618c86403c4f8a0dfb07e7032b709c44369473285d2a  models/l
 
 공개 LLVIP 모델은 검출 가능성을 확인하기 위한 기준선이다. Lepton 3.5의 160×120 영상은 LLVIP 학습 영상보다 정보량이 적으므로 실제 설치 거리·각도·가림 조건에서 오탐과 미탐을 별도로 측정해야 한다. LLVIP 데이터와 공개 가중치의 사용 조건도 배포 전에 확인한다.
 
-adapter module 경로가 없거나 파일을 찾지 못하면 일반 모드는 오류로 종료한다. `--debug`에서는 0~50의 임의 인원 수와 신뢰도 0.0을 생성해 통신 스레드로 전달한다. `--verbose`를 함께 사용하면 생성한 값이 서버 전송용으로 큐잉되었음을 ModelAdapter 로그로 출력한다. adapter module은 있지만 모델 파일만 없는 경우에는 기존처럼 추론과 전송을 생략한다.
+adapter module 경로가 없거나 파일을 찾지 못하면 일반 모드의 ModelAdapter 스레드는 오류를 알리고 종료하며, Main이 설정된 간격으로 다시 시작한다. `--debug`에서는 0~50의 임의 인원 수와 신뢰도 0.0을 생성해 통신 스레드로 전달한다. `--verbose`를 함께 사용하면 생성한 값이 서버 전송용으로 큐잉되었음을 ModelAdapter 로그로 출력한다. adapter module은 있지만 모델 파일만 없는 경우에는 기존처럼 추론과 전송을 생략한다.
 
 ## 실행
 
@@ -245,7 +245,63 @@ systemd에서는 셸 활성화 명령을 사용하지 않고 서비스 파일 �
 
 영상 디버그 GUI는 X11 또는 Wayland 화면이 필요하다. 창에서 `q`, `Q`, `Esc`를 누르거나 창을 닫으면 클라이언트 전체가 정상 종료된다. SSH로 실행할 때는 X11 forwarding을 활성화해야 한다.
 
-통신은 `GET /health`와 `POST /api/inference-results`에 연결 하나를 재사용한다. 연결 오류가 나면 기존 연결을 닫고 새 연결로 한 번 즉시 재시도하며, 두 시도가 모두 실패한 논리 요청만 연속 실패 1회로 계산한다. 느린 요청과 통신 실패는 warning이며 연속 실패 한도에 도달하면 error로 전체를 종료한다. 원시 센서용 `/api/sensor-readings`와 서버 `--logging`은 제거되었다.
+통신은 `GET /health`와 `POST /api/inference-results`에 연결 하나를 재사용한다. 연결 오류가 나면 기존 연결을 닫고 새 연결로 한 번 즉시 재시도하며, 두 시도가 모두 실패한 논리 요청만 연속 실패 1회로 계산한다. 느린 요청과 통신 실패는 warning이며 연속 실패 한도에 도달하면 통신 스레드가 error를 알리고 종료한다. Main이 설정된 간격으로 통신 스레드를 다시 시작한다. 원시 센서용 `/api/sensor-readings`와 서버 `--logging`은 제거되었다.
+
+### Raspberry Pi 부팅 시 자동 실행
+
+먼저 가상환경과 의존성, RPLIDAR 브리지, 실제 모델 파일 및
+`sensor-client/environment.json`을 준비하세요. 일반 모드이므로 모델 경로를 올바르게
+설정해야 실제 추론이 수행됩니다. 수동으로 실행 중인 클라이언트가 있다면 먼저 종료하세요.
+
+Raspberry Pi의 프로젝트 루트에서 다음 명령을 한 번 실행합니다.
+
+```bash
+sudo bash sensor-client/install_service.sh
+```
+
+`cdas-sensor-client.service`를 설치하고 즉시 시작하며, 이후 부팅 때마다 자동으로 실행합니다.
+실행 계정은 `sudo`를 호출한 일반 사용자입니다. root 셸에서 설치하거나 다른 계정을 쓰려면
+`sudo bash sensor-client/install_service.sh --user 사용자이름`으로 지정하세요.
+서비스에만 `video`, `dialout` 보조 그룹 권한을 적용합니다.
+
+서비스는 현재 프로젝트의 절대 경로를 사용하여 아래와 같이 실행합니다.
+가상환경 활성화는 필요하지 않으며, `--debug`, `--video`, `--verbose`는 모두 사용하지 않습니다.
+따라서 기본 사진 모드로 동작하며 GUI나 디버그 이미지 저장은 활성화하지 않습니다.
+
+```bash
+.venv/bin/python sensor-client/sensor_client.py
+```
+
+자식 스레드 오류는 Main이 복구합니다. systemd의 프로세스 자동 재시작은 사용하지 않습니다
+(`Restart=no`). 프로세스 전체가 종료되면 다음 부팅 또는 수동 시작까지 중지된 상태로
+유지됩니다. 중지 시 Main에 SIGINT를 보내 정리를 요청하고, 90초 내 종료하지 못하면 남은
+프로세스도 정리합니다. 네트워크 준비 이후 실행하도록 설정하지만 센서·서버 연결이 늦게
+준비되는 경우에는 기존 재시도 기능이 처리합니다.
+
+```bash
+# 상태와 실시간 로그
+sudo systemctl status cdas-sensor-client.service
+sudo journalctl -u cdas-sensor-client.service -f
+
+# 설정 변경 후 재시작 / 일시 중지
+sudo systemctl restart cdas-sensor-client.service
+sudo systemctl stop cdas-sensor-client.service
+
+# 현재 실행을 중지하고 부팅 시 자동 실행도 해제
+sudo systemctl disable --now cdas-sensor-client.service
+
+# 자동 실행을 다시 활성화하고 즉시 실행
+sudo systemctl enable --now cdas-sensor-client.service
+```
+
+설치 전에 서비스 내용만 보려면 `bash sensor-client/install_service.sh --dry-run`을
+사용하세요. 프로젝트를 옮겼다면 새 위치에서 설치 스크립트를 다시 실행해야 합니다.
+스크립트는 자신이 생성한 서비스만 갱신하며 기존의 수동 관리 서비스는 덮어쓰지 않습니다.
+이미 서비스를 설치했다면 스크립트를 다시 실행하여 변경된 설정을 적용하세요.
+이때 설정 적용을 위해 서비스가 한 번 재시작되며, 프로세스 종료 후 자동 재시작과는 별개입니다.
+
+구현은 `sensor-client/install_service.sh`의 `main()`(설치·등록·시작),
+`render_service()`(서비스 정의), `systemd_quote()`(경로 처리)에 있습니다.
 
 ## 호환 래퍼
 
